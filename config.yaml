@@ -1,0 +1,121 @@
+seed: 42
+
+paths:
+  raw_ts: data/100_Batches_IndPenSim_V3.csv
+  raw_stats: data/100_Batches_IndPenSim_Statistics.csv
+
+# Columns of 100_Batches_IndPenSim_V3.csv in file order; `src` = raw header name (header repaired on load,
+# see data.read_header). Raman spectra (positions 37+) are not loaded.
+# role: time | input | display (shown, never a model/R(t) input) | forbidden | meta
+# kind: online (every 0.2 h) | offline (every 12 h, available offline_delay_h after sampling)
+columns:
+  - {name: t,         src: "Time (h)",                                    role: time,      unit: h}
+  - {name: Fg,        src: "Aeration rate(Fg:L/h)",                       role: input,     kind: online, unit: L/h}
+  - {name: RPM,       src: "Agitator RPM(RPM:RPM)",                       role: display,   kind: online, unit: rpm}   # fixed 100 rpm
+  - {name: Fs,        src: "Sugar feed rate(Fs:L/h)",                     role: input,     kind: online, unit: L/h}
+  - {name: Fa,        src: "Acid flow rate(Fa:L/h)",                      role: input,     kind: online, unit: L/h}
+  - {name: Fb,        src: "Base flow rate(Fb:L/h)",                      role: input,     kind: online, unit: L/h}
+  - {name: Fc,        src: "Heating/cooling water flow rate(Fc:L/h)",     role: input,     kind: online, unit: L/h}
+  - {name: Fh,        src: "Heating water flow rate(Fh:L/h)",             role: input,     kind: online, unit: L/h}
+  - {name: Fw,        src: "Water for injection/dilution(Fw:L/h)",        role: input,     kind: online, unit: L/h}
+  - {name: pressure,  src: "Air head pressure(pressure:bar)",             role: input,     kind: online, unit: bar}
+  - {name: Fremoved,  src: "Dumped broth flow(Fremoved:L/h)",             role: input,     kind: online, unit: L/h}   # logged as negative flow
+  - {name: S,         src: "Substrate concentration(S:g/L)",              role: display,   kind: online, unit: g/L}   # not measurable online in a real plant
+  - {name: DO,        src: "Dissolved oxygen concentration(DO2:mg/L)",    role: input,     kind: online, unit: mg/L}
+  - {name: P,         src: "Penicillin concentration(P:g/L)",             role: forbidden, kind: online, unit: g/L}   # target construction only
+  - {name: V,         src: "Vessel Volume(V:L)",                          role: input,     kind: online, unit: L}
+  - {name: Wt,        src: "Vessel Weight(Wt:Kg)",                        role: input,     kind: online, unit: kg}
+  - {name: pH,        src: "pH(pH:pH)",                                   role: input,     kind: online, unit: pH}
+  - {name: T,         src: "Temperature(T:K)",                            role: input,     kind: online, unit: K}
+  - {name: Q,         src: "Generated heat(Q:kJ)",                        role: input,     kind: online, unit: kJ}
+  - {name: CO2outgas, src: "carbon dioxide percent in off-gas(CO2outgas:%)", role: input,  kind: online, unit: "%"}
+  - {name: Fpaa,      src: "PAA flow(Fpaa:PAA flow (L/h))",               role: input,     kind: online, unit: L/h}
+  - {name: PAA_off,   src: "PAA concentration offline(PAA_offline:PAA (g L^{-1}))", role: input, kind: offline, unit: mg/L}  # header says g/L, values are mg/L
+  - {name: Foil,      src: "Oil flow(Foil:L/hr)",                         role: input,     kind: online, unit: L/h}
+  - {name: NH3_off,   src: "NH_3 concentration off-line(NH3_offline:NH3 (g L^{-1}))", role: input, kind: offline, unit: mg/L}  # header says g/L, values are mg/L
+  - {name: OUR,       src: "Oxygen Uptake Rate(OUR:(g min^{-1}))",        role: input,     kind: online, unit: g/min}
+  - {name: O2,        src: "Oxygen in percent in off-gas(O2:O2  (%))",    role: input,     kind: online, unit: "%"}
+  - {name: P_off,     src: "Offline Penicillin concentration(P_offline:P(g L^{-1}))", role: input, kind: offline, unit: g/L}
+  - {name: X_off,     src: "Offline Biomass concentratio(X_offline:X(g L^{-1}))", role: input, kind: offline, unit: g/L}
+  - {name: CER,       src: "Carbon evolution rate(CER:g/h)",              role: input,     kind: online, unit: g/h}
+  - {name: NH3_shots, src: "Ammonia shots(NH3_shots:kgs)",                role: input,     kind: online, unit: kg}
+  - {name: Visc_off,  src: "Viscosity(Viscosity_offline:centPoise)",      role: input,     kind: offline, unit: cP}
+  - {name: fault_ref,  src: "Fault reference(Fault_ref:Fault ref)", role: forbidden}   # 1 while a fault is active
+  - {name: ctrl,       src: "0 - Recipe driven 1 - Operator controlled(Control_ref:Control ref)", role: meta}
+  - {name: pat,        src: "1- No Raman spec, 1-Raman spec recorded,2-PAT control(PAT_ref:PAT ref)", role: meta}  # 2 = Raman-based PAT (APC) control
+  - {name: batch,      src: "Batch reference(Batch_ref:Batch ref)", role: meta}        # batch number 1-100 (lookup key only)
+  - {name: batch_dup,  src: "Batch ID",   role: forbidden}   # duplicate of batch, dropped on load
+  - {name: fault_flag, src: "Fault flag", role: forbidden}   # 1 for fault batches 91-100
+
+split:
+  per_group: {train: 20, val: 5, test: 5}   # normal batches per control group (recipe/operator/apc)
+  n_folds: 5                                # folds over train, shared by bands, OOF predictions, SHAP
+
+offline_delay_h: 4        # Li et al. 2024: offline results arrive 4 h after sampling
+cutoff_frac: 0.5          # t_cut = frac x median train batch length, same absolute hour for every batch
+sensitivity_fracs: [0.3, 0.7]
+
+# Safety ranges for R(t) = 100 * min(1, sum_i w_i d_i(t)).
+#   li2024: Li, Qiu & You (2024) Chem. Eng. Sci. 292, 119990, Table 1. DCO2 (<= 7.57 mg/L) is not in the data.
+#   data:   no Li 2024 bound; train-normal data_quantiles (Li bounds alone catch almost no fault).
+# s_i (deviation giving d_i = 1) = scale_mult x train-normal std. Resolved values are frozen in thresholds.json.
+safety:
+  scale_mult: 3
+  data_quantiles: [0.005, 0.995]
+  vars:
+    # w = 0: 2400 mg/L is exceeded in ~10% of normal time points and saturates R(t); still displayed
+    PAA_off:   {lo: 200, hi: 2400,   source: li2024, w: 0}
+    NH3_off:   {lo: 150,             source: li2024}
+    Visc_off:  {hi: 100,             source: li2024}
+    DO:        {lo: 5.1,             source: li2024}
+    V:         {lo: 0,   hi: 100000, source: li2024}
+    Wt:        {lo: 0,   hi: 140000, source: li2024}
+    pH:        {source: data}
+    T:         {source: data}
+    CO2outgas: {source: data}
+    O2:        {source: data}
+    OUR:       {source: data}
+    CER:       {source: data}
+
+band:
+  vars: [DO, pH, T, OUR, CER, CO2outgas, O2, Q, Fs, Fg, pressure, Fa, Fb, Fc]
+  k: 3.0
+  min_n: 10               # no band at time steps with fewer train batches
+  std_floor_q: 0.1        # std floor = 10th percentile (over time) of the variable's positive stds
+
+warning:                  # thresholds from false-alarm targets on val normal batches (time-point rate)
+  far_r_warning: 0.025    # R(t) >= warning cut
+  far_r_critical: 0.01    # R(t) >= critical cut
+  far_band: 0.025         # band rule alone; union with R(t) keeps WARNING+ FAR <= 5%
+  band_n_vars: [1, 2, 3, 4]
+  band_consec: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+
+features:                 # computed on 0 <= t <= t_cut
+  mean: [DO, pH, T, OUR, CER, CO2outgas, O2, pressure, Fg]
+  min: [DO]
+  last: [OUR, CER, V, Wt]
+  total: [Fs, Foil, Fpaa, Fw, Fremoved]      # sum x dt
+  offline_last: [P_off, X_off, Visc_off, PAA_off, NH3_off]
+
+sliders:                  # manipulated inputs only, one feature per variable
+  Fs_tot: "First-half total sugar feed (L)"
+  Foil_tot: "First-half total oil feed (L)"
+  Fpaa_tot: "First-half total PAA feed (L)"
+  Fw_tot: "First-half total water for injection (L)"
+  Fg_mean: "First-half mean aeration rate (L/h)"
+  pressure_mean: "First-half mean head pressure (bar)"
+
+xgb:
+  fixed: {max_depth: 2, n_estimators: 300, learning_rate: 0.05, min_child_weight: 5,
+          subsample: 0.8, colsample_bytree: 0.8, reg_lambda: 5}
+  space: {max_depth: [2, 3, 4], n_estimators: [100, 300, 600], learning_rate: [0.03, 0.05, 0.1],
+          min_child_weight: [1, 3, 5], subsample: [0.7, 0.8, 0.9, 1.0],
+          colsample_bytree: [0.7, 0.8, 0.9, 1.0], reg_lambda: [1, 5, 10]}
+  n_iter: 30
+  cv_seeds: [0, 1, 2]
+  min_gain: 0.02          # search must beat the fixed params by >= 2% CV RMSE
+
+tree: {max_depth: 3, min_samples_leaf: 5}
+dummy: {n_dummy: 3, n_seeds: 10, flag_frac: 0.7}
+
+demo_batches: []          # test batches for the presentation; must be set before `python -m main test`
