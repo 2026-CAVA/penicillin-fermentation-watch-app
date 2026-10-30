@@ -110,6 +110,7 @@ run_whatif(92, {"Fs_tot": 0.05})  # 슬라이더: 전반부 설탕 공급 +5%
 - 저장소 폴더(`back`)를 작업 위치로 두고 실행합니다. 학습은 하지 않고 `data/cache/`와 `artifacts/`만 읽습니다.
 - `batch_view` 주요 키: `pred_source`(학습 배치는 `"oof"` = 그 배치를 빼고 학습한 모델, 그 외 `"final"`), `tag`, `light_final` / `light_worst`, `y_pred_kg` / `y_true_kg`, `t`, `series`(변수별 값·밴드·안전선), `risk`(R(t)·등급·경보 원인 Top 3), `shap_top3`, `rule`, `whatif`(슬라이더 범위·반응 곡선, 규칙 What-if).
 - 화면 문구(꼬리표, 안내, 슬라이더 이름)는 영어입니다. 슬라이더 이름은 `config.yaml`의 `sliders`에서 바꿉니다.
+- 설탕 공급(`Fs_tot`)을 늘리면 늘어난 양(L)만큼 전반부 끝 부피 `V_last`(L)와 무게 `Wt_last`(kg, 밀도 약 1 kg/L 가정)도 함께 늘린 뒤 예측합니다. `run_whatif` 결과의 `inputs`에 `V_last`·`Wt_last`가 `linked_to: "Fs_tot"`로 함께 나오고, 반응 곡선도 같은 방식으로 계산합니다. 비율은 `main/whatif.py`의 `COUPLED`에서 바꿉니다.
 
 ## Appendix
 

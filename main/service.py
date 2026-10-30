@@ -88,7 +88,8 @@ def batch_view(batch_id):
         "rule": {**next(r for r in s["rules"]["rules"] if r["leaf"] == leaf), "tree_r2": s["rules"]["r2"]},
         "whatif": {
             "note": "Computed from patterns the model learned, not a causal effect. "
-                    "Only first-half (0 to t_cut) operation is changed.",
+                    "Only first-half (0 to t_cut) operation is changed. "
+                    "Added sugar feed also raises the end-of-half volume (V_last) and weight (Wt_last).",
             "sliders": [{"feature": f, "label": lab, "value": float(x[f]), "min": s["bounds"][f][0],
                          "max": s["bounds"][f][1], "curve": response_curve(model, x, f, s["bounds"])}
                         for f, lab in cfg()["sliders"].items()],

@@ -116,6 +116,26 @@ def test_whatif_zero_change_and_bounds(s):
         assert st["bounds"][f][0] <= io["after"] <= st["bounds"][f][1]
 
 
+def test_whatif_sugar_raises_volume_and_weight():
+    class Sum:  # stand-in model: prediction = sum of features, so linked changes show up in delta
+        def predict(self, X):
+            return X.sum(axis=1).to_numpy()
+    import main.whatif as w
+    x = pd.Series({"Fs_tot": 100.0, "V_last": 50000.0, "Wt_last": 60000.0, "Fg_mean": 30.0})
+    coupled = w.COUPLED
+    w_shap, w.shap_values = w.shap_values, lambda m, X: X * 0
+    try:
+        r = whatif_predict(Sum(), x, {"Fs_tot": 0.1}, {"Fs_tot": (0, 1000)}, coupled)
+        c = w.response_curve(Sum(), x, "Fs_tot", {"Fs_tot": (0, 200)}, n=3, coupled=coupled)
+    finally:
+        w.shap_values = w_shap
+    k = coupled["Fs_tot"]
+    assert r["inputs"]["V_last"] == {"before": 50000.0, "after": 50000.0 + 10 * k["V_last"], "linked_to": "Fs_tot"}
+    assert r["inputs"]["Wt_last"]["after"] == pytest.approx(60000.0 + 10 * k["Wt_last"])
+    assert r["delta"] == pytest.approx(10 * (1 + k["V_last"] + k["Wt_last"]))
+    assert c["y"][1] == pytest.approx(x.sum())  # grid midpoint = current value -> unchanged
+
+
 def test_rule_whatif(s):
     ranges, cuts = s["th"]["ranges"], s["th"]["cuts"]
     ts = offline_available(s["ts"][s["ts"].batch == 92])
