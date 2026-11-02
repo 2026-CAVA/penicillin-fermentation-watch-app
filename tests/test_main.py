@@ -224,7 +224,7 @@ def test_api_matches_mockup_contract(s):
     rows = c.get("/batches").json()
     assert len(rows) == 100 and all(set(r) == summary for r in rows)
     d = c.get(f"/batches/{bid}").json()
-    assert set(d) == summary | {"intervalH", "seriesMeta", "series"}
+    assert set(d) == summary | {"intervalH", "shapBase", "seriesMeta", "series"}
     assert set(d["seriesMeta"]) == set(d["series"][0]) - {"t", "score", "state", "predictedFinal"}
     assert set(d["series"][0]) == {"t", "pH", "DO", "temperature", "feedRate", "penicillin", "score", "state",
                                    "predictedFinal"}
@@ -253,3 +253,17 @@ def test_metadata(s):
     assert all(d["label"] != d["feature"] for d in v["shap_top3"])
     sh = shap_values(service._route(v["batch_id"])[0], s["table"].loc[[v["batch_id"]], s["q"]["features"]].astype(float))
     assert v["shap_base"] + sh.iloc[0].drop("_base").sum() == pytest.approx(v["y_pred_kg"], rel=1e-4)
+
+
+def test_shap_all(s):
+    from fastapi.testclient import TestClient
+    from main.api import app
+    c, bid = TestClient(app), s["split"]["val"][0]
+    allv = c.get(f"/batches/{bid}/shap?k=0").json()
+    assert len(allv) == len(s["q"]["features"])
+    d = c.get(f"/batches/{bid}").json()
+    t_cut = s["split"]["t_cut"]
+    pred = next(x["predictedFinal"] for x in d["series"] if x["t"] >= t_cut)
+    assert d["shapBase"] + sum(x["value"] for x in allv) == pytest.approx(pred, rel=1e-4)  # waterfall adds up
+    v = service.batch_view(bid)
+    assert [x["feature"] for x in v["shap_all"]] == [x["feature"] for x in allv]

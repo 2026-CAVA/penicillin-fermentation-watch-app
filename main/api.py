@@ -2,7 +2,7 @@
 
     GET  /batches                  list (mockup BatchSummary rows)
     GET  /batches/{id}             summary + per-time-point series
-    GET  /batches/{id}/shap?t=     yield SHAP top 5 (t is accepted but not used yet: one SHAP per batch)
+    GET  /batches/{id}/shap?t=&k=  yield SHAP top k (default 5, k=0 for all; t is accepted but not used yet)
     POST /simulate                 {"batch_id": 92, "changes": {"Fpaa_tot": 0.05}} -> run_whatif
     GET  /model                    model, target, validation metrics, alarm rule, demo batches
 """
@@ -33,9 +33,9 @@ def batch(batch_id: int):
 
 
 @app.get("/batches/{batch_id}/shap")
-def shap(batch_id: int, t: float | None = None):
+def shap(batch_id: int, t: float | None = None, k: int = 5):
     _known(batch_id)
-    return service.shap_top(batch_id)
+    return service.shap_top(batch_id, k or None)
 
 
 @app.get("/model")

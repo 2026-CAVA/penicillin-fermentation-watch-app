@@ -108,6 +108,7 @@ def batch_view(batch_id):
         "risk": {"R": _lst(rk.R), "grade": rk.grade.tolist(), "band_alarm": rk.band_alarm.astype(bool).tolist(),
                  "cuts": cuts, "alarm_top3": causes},
         "shap_top3": _drivers(sh, x), "shap_base": float(sh["_base"]),
+        "shap_all": _drivers(sh, x, k=len(x)),  # every feature, largest |shap| first; base + sum = y_pred_kg
         "rule": {**next(r for r in s["rules"]["rules"] if r["leaf"] == leaf), "tree_r2": s["rules"]["r2"],
                  "reference_only": s["rules"]["reference_only"]},
         "whatif": {
@@ -174,13 +175,19 @@ def detail(batch_id):
                          "predictedFinal": np.where(ts.t >= s["split"]["t_cut"], _y_pred(batch_id), np.nan)})
     rows = rows.astype(object).where(rows.notna(), None)
     meta = {k: {"column": c, **_meta(c)} for k, c in SERIES.items()}
-    return {**summary(batch_id), "intervalH": DT, "seriesMeta": meta, "series": rows.to_dict("records")}
+    return {**summary(batch_id), "intervalH": DT, "shapBase": _shap(batch_id)["_base"], "seriesMeta": meta,
+            "series": rows.to_dict("records")}
+
+
+@cache
+def _shap(batch_id):
+    model, _, _ = _route(batch_id)
+    return shap_values(model, _state()["X"].loc[[batch_id]].astype(float)).iloc[0].astype(float).to_dict()
 
 
 def shap_top(batch_id, k=5):
-    """Yield SHAP (one per batch, not per time point), largest |value| first."""
-    model, _, _ = _route(batch_id)
-    sh = shap_values(model, _state()["X"].loc[[batch_id]].astype(float)).iloc[0].drop("_base")
+    """Yield SHAP (one per batch, not per time point), largest |value| first; k=None for every feature."""
+    sh = pd.Series(_shap(batch_id)).drop("_base")
     return [{"feature": f, "label": feature_label(f), "value": float(sh[f])}
             for f in sh.abs().sort_values(ascending=False).index[:k]]
 
