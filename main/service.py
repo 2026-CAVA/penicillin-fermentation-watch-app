@@ -7,6 +7,7 @@
     contrib(batch_id, t) -> dict              R(t) contribution per variable at time t
     pred_trend(batch_id, t) -> list           yield prediction of each cutoff model reached by t
     forecast(batch_id, t) -> dict             penicillin concentration t .. t + 8 h with an 80% range
+    optimize(batch_id, max_change) -> dict    slider settings with the best predicted yield (reference only)
     model_info() -> dict                      model, target, val metrics, alarm rule, demo batches
     events(batch_id), explanation(batch_id)   excursion list, first-alarm sentence
     compare(ids, vars), reference_batch(id)  series of several batches side by side
@@ -20,6 +21,7 @@ from main import forecast as fc
 from main.data import ART, DATA, DT, cfg, col_meta, feature_label, load_split, load_ts, offline_available, read_json
 from main.model import load_xgb, shap_values, top_k_drivers
 from main.warning import GRADES, band_at, deviation, load_bands, range_sign, risk_contrib, runs
+from main.whatif import optimize as optimize_sliders
 from main.whatif import response_curve, rule_whatif, rule_whatif_by_var, whatif_predict
 
 TAGS = {"train": "Train batch - predicted by the model trained without this batch",
@@ -423,3 +425,22 @@ def forecast(batch_id, t):
             "path": [{"t": round(now + h, 4), "h": h, "p": float(v), "lo": float(v - half[f"{h:g}"]),
                       "hi": float(v + half[f"{h:g}"])} for h, v in zip(meta["horizons"], p)],
             "note": "80% range from out-of-fold errors on train batches; offline P arrives 4 h after sampling."}
+
+
+# --- optimisation (P8) -----------------------------------------------------------------------------
+
+def optimize(batch_id, max_change=None):
+    """Slider settings with the highest predicted yield near this batch's own (train range, +-max_change),
+    scored as the fold models' mean minus their spread. Reference only: patterns, not causes."""
+    s, o = _state(), cfg()["optimize"]
+    mc = o["max_change"] if max_change is None else max_change
+    if not 0 < mc <= 1:
+        raise ValueError("max_change must be in (0, 1]")
+    r = optimize_sliders(list(s["folds"].values()), s["X"].loc[batch_id], s["bounds"], mc, o["penalty"],
+                         o["n_samples"], cfg()["seed"])
+    half = read_json(ART / "cutoffs.json")[f"{s['split']['t_cut']:g}"]["interval_halfwidth"]
+    return {**r, "max_change": mc, "labels": {f: cfg()["sliders"][f] for f in r["best"]},
+            "note": f"Reference only. Computed from patterns the fold models learned, not a causal effect; "
+                    f"{r['models_agree']}/{r['n_models']} models predict a gain. Acid, base, cooling and heating "
+                    f"water flows are set by the pH and temperature controllers. The yield prediction itself is "
+                    f"uncertain by about +-{half:.0f} kg (80% range)."}

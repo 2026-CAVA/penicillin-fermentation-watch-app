@@ -127,6 +127,12 @@ xgb:
   cv_seeds: [0, 1, 2]
   min_gain: 0.02          # search must beat the fixed params by >= 2% CV RMSE
 
+optimize:                 # slider search (whatif.optimize); also limited to the train range
+  max_change: 0.2         # +-20% of this batch's own value (user choice; median gain 57 kg on val,
+                          # all 5 fold models agree in 12/15 val batches)
+  penalty: 1.0            # score = mean - penalty x std over the 5 fold models
+  n_samples: 2000
+
 forecast:                 # P(t + h), h = step_h .. horizon_h (main/forecast.py)
   horizon_h: 8
   step_h: 0.5

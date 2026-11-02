@@ -401,3 +401,18 @@ def test_forecast_api(s):
     r = TestClient(app).get(f"/batches/{s['split']['val'][0]}/forecast?t=120").json()
     assert r["t"] == 120 and len(r["path"]) == 16 and r["path"][-1]["h"] == 8
     assert all(p["lo"] < p["p"] < p["hi"] for p in r["path"])
+
+
+def test_optimize(s):
+    from fastapi.testclient import TestClient
+    from main.api import app
+    st, bid = service._state(), s["split"]["val"][0]
+    r = TestClient(app).post(f"/batches/{bid}/optimize", json={}).json()
+    mc = cfg()["optimize"]["max_change"]
+    for f, v in r["best"].items():
+        lo, hi = st["bounds"][f]
+        cur = r["current"][f]
+        assert max(lo, cur * (1 - mc)) - 1e-6 <= v <= min(hi, cur * (1 + mc)) + 1e-6
+    assert r["y_pred_best"] - r["y_pred_current"] == pytest.approx(r["gain_kg"], abs=0.01)  # float32 predictions
+    assert r["note"].startswith("Reference only") and 0 <= r["models_agree"] <= r["n_models"] == 5
+    assert TestClient(app).post(f"/batches/{bid}/optimize", json={"max_change": 2}).status_code == 422

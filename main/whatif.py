@@ -73,3 +73,26 @@ def rule_whatif_by_var(ts_batch, ranges, cuts, persist=1):
     df = pd.DataFrame(rows).drop(columns="vars")
     df["reduction"] = df.critical_before - df.critical_after
     return df.sort_values("reduction", ascending=False, ignore_index=True)
+
+
+def optimize(models, x_row, bounds, max_change, penalty=1.0, n=2000, seed=0):
+    """Random search over the sliders inside the train range and +-max_change of the current values.
+    Score = mean - penalty x std over `models` (the fold models), so conditions the models disagree on lose.
+    Returns the current and best conditions, their predictions per model, and the improvement."""
+    rng = np.random.default_rng(seed)
+    lo = {f: max(b[0], x_row[f] * (1 - max_change)) for f, b in bounds.items()}
+    hi = {f: min(b[1], x_row[f] * (1 + max_change)) for f, b in bounds.items()}
+    X = pd.concat([_frame(x_row)] * (n + 1), ignore_index=True)  # row 0 = current condition
+    for f in bounds:
+        if lo[f] < hi[f]:
+            X.loc[1:, f] = rng.uniform(lo[f], hi[f], n)
+    P = np.column_stack([m.predict(X) for m in models])  # rows x models
+    score = P.mean(axis=1) - penalty * P.std(axis=1)
+    best = int(np.argmax(score))
+    gain = P[best] - P[0]  # per model
+    return {"current": {f: float(x_row[f]) for f in bounds}, "best": {f: float(X.loc[best, f]) for f in bounds},
+            "change_pct": {f: 100 * (X.loc[best, f] / x_row[f] - 1) if x_row[f] else 0.0 for f in bounds},
+            "y_pred_current": float(P[0].mean()), "y_pred_best": float(P[best].mean()),
+            "gain_kg": float(gain.mean()), "gain_by_model_kg": gain.tolist(),
+            "models_agree": int((gain > 0).sum()), "n_models": len(models),
+            "spread_current_kg": float(P[0].std()), "spread_best_kg": float(P[best].std())}

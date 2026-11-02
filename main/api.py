@@ -9,6 +9,7 @@
     GET  /batches/{id}/events?all=&t= excursions per variable (>= 1 h) during alarms; all=true for every one
     GET  /compare?ids=6,92&vars=DO,pH   batches side by side (one id: a reference batch is added)
     GET  /batches/{id}/forecast?t= penicillin concentration t .. t + 8 h with an 80% range
+    POST /batches/{id}/optimize    {"max_change": 0.2} (optional) -> best slider settings (reference only)
     GET  /model                    model, target, validation metrics, alarm rule, demo batches
 """
 from fastapi import FastAPI, HTTPException
@@ -82,6 +83,16 @@ def compare(ids: str, vars: str | None = None):
 def forecast(batch_id: int, t: float):
     _known(batch_id)
     return _call(service.forecast, batch_id, t)
+
+
+class Optimize(BaseModel):
+    max_change: float | None = None
+
+
+@app.post("/batches/{batch_id}/optimize")
+def optimize(batch_id: int, req: Optimize | None = None):
+    _known(batch_id)
+    return _call(service.optimize, batch_id, req.max_change if req else None)
 
 
 @app.get("/model")
