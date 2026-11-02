@@ -6,6 +6,7 @@
     summary(batch_id, t), detail(batch_id, t), shap_top(batch_id, k, t) -> FermentIQ mockup shapes (main.api)
     contrib(batch_id, t) -> dict              R(t) contribution per variable at time t
     pred_trend(batch_id, t) -> list           yield prediction of each cutoff model reached by t
+    forecast(batch_id, t) -> dict             penicillin concentration t .. t + 8 h with an 80% range
     model_info() -> dict                      model, target, val metrics, alarm rule, demo batches
     events(batch_id), explanation(batch_id)   excursion list, first-alarm sentence
     compare(ids, vars), reference_batch(id)  series of several batches side by side
@@ -15,6 +16,7 @@ from functools import cache
 import numpy as np
 import pandas as pd
 
+from main import forecast as fc
 from main.data import ART, DATA, DT, cfg, col_meta, feature_label, load_split, load_ts, offline_available, read_json
 from main.model import load_xgb, shap_values, top_k_drivers
 from main.warning import GRADES, band_at, deviation, load_bands, range_sign, risk_contrib, runs
@@ -288,6 +290,7 @@ def model_info():
                             "top": [{**t, "label": feature_label(t["feature"])} for t in cc["top"]],
                             "note": f"Validation set ({len(s['split']['val'])} batches): reference only. "
                                     "Directions: +1 = higher value, higher yield; 0 = constant feature."},
+            "forecast": {k: v for k, v in read_json(ART / "forecast_meta.json").items() if k != "features"},
             "sliders": list(s["bounds"]), "demo_batches": cfg()["demo_batches"]}
 
 
@@ -389,3 +392,34 @@ def compare(ids, vars=None):
     meta = {v: ({"label": "Risk score R(t)", "unit": "0-100", "kind": "online"} if v == "R" else _meta(v)) for v in vars}
     return {"vars": meta, "batches": out,
             "reference_rule": "One batch given: the closest-length normal batch of the same control group is added."}
+
+
+# --- P(t + h) forecast (P7) ------------------------------------------------------------------------
+
+@cache
+def _fc_models():
+    meta = read_json(ART / "forecast_meta.json")
+    return meta, load_xgb(ART / "forecast.json"), {k: load_xgb(ART / f"forecast_fold{k}.json")
+                                                   for k in range(cfg()["split"]["n_folds"])}
+
+
+def forecast(batch_id, t):
+    """Penicillin concentration path from t to t + 8 h (every 0.5 h) with an 80% range, from data up to t
+    only. A train batch is forecast by the fold model that left it out."""
+    s = _state()
+    meta, final, folds = _fc_models()
+    ts = s["ts"][(s["ts"].batch == batch_id) & (s["ts"].t <= t + 1e-9)]
+    if ts.empty:
+        raise ValueError(f"t = {t} is before the first time point")
+    row = fc.frame(ts).iloc[[-1]]
+    R = pd.concat([row.assign(h=h) for h in meta["horizons"]], ignore_index=True)
+    r = s["table"].loc[batch_id]
+    model = folds[int(r.fold)] if r.split == "train" else final
+    p = fc.predict(model, R, meta["features"])
+    now, half = float(row.t.iloc[0]), meta["halfwidth"]
+    return {"t": now, "unit": "g/L", "label": "Penicillin concentration",
+            "last_measured": {"value": None if pd.isna(row.P_off.iloc[0]) else float(row.P_off.iloc[0]),
+                              "age_h": None if pd.isna(row.P_off_age_h.iloc[0]) else float(row.P_off_age_h.iloc[0])},
+            "path": [{"t": round(now + h, 4), "h": h, "p": float(v), "lo": float(v - half[f"{h:g}"]),
+                      "hi": float(v + half[f"{h:g}"])} for h, v in zip(meta["horizons"], p)],
+            "note": "80% range from out-of-fold errors on train batches; offline P arrives 4 h after sampling."}

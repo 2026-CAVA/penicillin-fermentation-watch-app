@@ -50,7 +50,7 @@ cd back
 .venv\Scripts\python -m main all
 ```
 
-`all`은 표의 앞 5단계(`prepare` → `warning` → `quality` → `cutoffs` → `explain`)를 차례로 실행합니다(약 1분). `check`와 `test`는 따로 실행합니다. 결과는 터미널에 출력되고, 다음 단계가 쓸 파일은 `data/cache/`와 `artifacts/`에 저장됩니다.
+`all`은 표의 앞 6단계(`prepare` → `warning` → `quality` → `cutoffs` → `forecast` → `explain`)를 차례로 실행합니다(약 1분 30초). `check`와 `test`는 따로 실행합니다. 결과는 터미널에 출력되고, 다음 단계가 쓸 파일은 `data/cache/`와 `artifacts/`에 저장됩니다.
 
 | 단계 | 하는 일 |
 |---|---|
@@ -58,6 +58,7 @@ cd back
 | `warning` | 밴드, R(t), 경보 경계값 결정·고정 |
 | `quality` | 요약 표, XGBoost 학습(+fold 모델), 기준선 비교 |
 | `cutoffs` | 컷오프(46~161 h)마다 수율 모델 학습, 반복 CV로 제공 여부 결정 → 시점별 예측 추이 |
+| `forecast` | 8 h 뒤까지 페니실린 농도 예측 모델, 지속·선형 연장 기준선 비교, 80 % 범위 |
 | `explain` | SHAP 중요도, 결정트리 규칙, 더미변수 검증, SHAP·Permutation 교차 검증 |
 | `check` | 데이터 점검 출력 (요청할 때만) |
 | `test` | 시험 세트 최종 평가 (**아래 규칙 참고**) |

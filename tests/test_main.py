@@ -312,7 +312,8 @@ def test_replay_has_no_future(t0, monkeypatch):
         for f in (service.events, service.explanation):
             f.cache_clear()
         return json.dumps([service.detail(92, t0), service.batch_view(92, t0), service.events(92, True, t0),
-                           service.contrib(92, t0), service.shap_top(92, 5, t0)], sort_keys=True, default=str)
+                           service.contrib(92, t0), service.shap_top(92, 5, t0), service.forecast(92, t0)],
+                          sort_keys=True, default=str)
     base = views()
     st = dict(service._state())
     ts, risk = st["ts"].copy(), st["risk"].copy()
@@ -381,3 +382,22 @@ def test_prediction_ranges(s):
         assert p["y_pred_lo"] < p["y_pred"] < p["y_pred_hi"] and p["spread_lo"] <= p["spread_hi"]
         half = cut[f"{p['t_cut']:g}"]["interval_halfwidth"]
         assert p["y_pred_hi"] - p["y_pred"] == pytest.approx(half, rel=1e-5)
+
+
+@pytest.mark.parametrize("t0", [30.0, 100.0, 180.0])
+def test_forecast_features_causal(s, t0):
+    """Features built from the whole batch equal features built from data up to t0, at every point <= t0."""
+    from main import forecast as fc
+    ts = s["ts"][s["ts"].batch.isin([1, 2])]
+    full, cut = fc.frame(ts), fc.frame(ts[ts.t <= t0])
+    pd.testing.assert_frame_equal(full.loc[cut.index], cut)
+
+
+def test_forecast_api(s):
+    from fastapi.testclient import TestClient
+    from main.api import app
+    meta = read_json(ART / "forecast_meta.json")
+    assert meta["val_pass"]  # beats persistence and linear extrapolation at every horizon on val
+    r = TestClient(app).get(f"/batches/{s['split']['val'][0]}/forecast?t=120").json()
+    assert r["t"] == 120 and len(r["path"]) == 16 and r["path"][-1]["h"] == 8
+    assert all(p["lo"] < p["p"] < p["hi"] for p in r["path"])

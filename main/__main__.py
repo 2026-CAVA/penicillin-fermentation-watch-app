@@ -1,6 +1,6 @@
-"""Pipeline CLI: python -m main {prepare,check,warning,quality,cutoffs,explain,test,serve,all} ...
+"""Pipeline CLI: python -m main {prepare,check,warning,quality,cutoffs,forecast,explain,test,serve,all} ...
 
-all = prepare warning quality cutoffs explain. `test` (one-time test-set evaluation) and `check` run only on request.
+all = prepare warning quality cutoffs forecast explain. `test` (one-time test-set evaluation) and `check` run only on request.
 serve = HTTP API (main.api) on http://127.0.0.1:8000, reads the files the steps wrote.
 Each step reads the previous step's files in data/cache/ and artifacts/ and prints its results.
 """
@@ -11,6 +11,7 @@ from datetime import datetime
 import numpy as np
 import pandas as pd
 
+from main import forecast as fc
 from main.data import (ART, DATA, DT, assemble, batch_meta, batch_yield_kg, cfg, feature_cols, load_raw,
                        load_split, load_ts, make_split, names, offline_available, raw_path, read_json, write_json)
 from main.model import (baselines, bootstrap_ci, cross_check, dummy_check, export_rules, fit_rule_tree, global_importance,
@@ -249,6 +250,42 @@ def run_cutoffs():
               f"{r['spread_width_median']:8.0f}{r['val_coverage_spread']:7.0%}  {'yes' if r['provided'] else 'no'}")
 
 
+def run_forecast():
+    """P(t + h) forecast, h = 0.5..8 h: final + fold models, 80% range from train OOF |error| per h,
+    val comparison with persistence (latest arrived P_off) and its linear extrapolation."""
+    c, f = cfg(), cfg()["forecast"]
+    ts, split = load_ts(), load_split()
+    F = fc.frame(ts)
+    cols, H = fc.feature_cols(F), fc.horizons()
+    R = fc.rows(ts, F, H, f["every_h"])
+    tr, va = R[R.batch.isin(split["train"])].copy(), R[R.batch.isin(split["val"])].copy()
+    fc.fit(tr, cols, f["params"], c["seed"]).save_model(ART / "forecast.json")
+    fold = tr.batch.map(split["fold"])
+    tr["oof"] = np.nan
+    for k in range(c["split"]["n_folds"]):
+        m = fc.fit(tr[fold != k], cols, f["params"], c["seed"])
+        m.save_model(ART / f"forecast_fold{k}.json")
+        tr.loc[fold == k, "oof"] = fc.predict(m, tr[fold == k], cols)
+    q = (tr.p_true - tr.oof).abs().groupby(tr.h).quantile(f["interval"])
+    va["pred"] = fc.predict(load_xgb(ART / "forecast.json"), va, cols)
+    by_h = {}
+    for h, d in va.groupby("h"):
+        by_h[f"{h:g}"] = {"rmse": metrics(d.p_true, d.pred)["rmse"], "rmse_persistence": metrics(d.p_true, d.base)["rmse"],
+                          "rmse_linear": metrics(d.p_true, fc.linear(d))["rmse"],
+                          "halfwidth": float(q[h]), "coverage": float(((d.p_true - d.pred).abs() <= q[h]).mean())}
+    passed = all(r["rmse"] < min(r["rmse_persistence"], r["rmse_linear"]) for r in by_h.values())
+    write_json(ART / "forecast_meta.json", {"features": cols, "horizons": H, "every_h": f["every_h"],
+                                            "halfwidth": {f"{h:g}": float(v) for h, v in q.items()},
+                                            "val": by_h, "val_pass": passed})
+    print(f"rows: train {len(tr)}, val {len(va)} ({f['every_h']} h grid x {len(H)} horizons)")
+    print(f"{'h':>5}{'rmse':>8}{'persist':>9}{'linear':>8}{'+-80%':>8}{'cover':>7}  (val, g/L)")
+    for h in (0.5, 2, 4, 6, 8):
+        r = by_h[f"{h:g}"]
+        print(f"{h:5g}{r['rmse']:8.2f}{r['rmse_persistence']:9.2f}{r['rmse_linear']:8.2f}{r['halfwidth']:8.2f}"
+              f"{r['coverage']:7.0%}")
+    print(f"beats persistence and linear extrapolation at every horizon: {'yes' if passed else 'no'}")
+
+
 def run_explain():
     """Global SHAP importance (fold models on their own fold), rule tree, dummy-variable check."""
     c, split, q = cfg(), load_split(), read_json(ART / "quality.json")
@@ -334,8 +371,9 @@ def run_serve():
 
 
 STEPS = {"prepare": run_prepare, "check": run_check, "warning": run_warning, "quality": run_quality,
-         "cutoffs": run_cutoffs, "explain": run_explain, "test": run_test, "serve": run_serve}
-ALL = ["prepare", "warning", "quality", "cutoffs", "explain"]
+         "cutoffs": run_cutoffs, "forecast": run_forecast, "explain": run_explain, "test": run_test,
+         "serve": run_serve}
+ALL = ["prepare", "warning", "quality", "cutoffs", "forecast", "explain"]
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(prog="python -m main", description=__doc__.splitlines()[0])

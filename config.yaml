@@ -127,6 +127,14 @@ xgb:
   cv_seeds: [0, 1, 2]
   min_gain: 0.02          # search must beat the fixed params by >= 2% CV RMSE
 
+forecast:                 # P(t + h), h = step_h .. horizon_h (main/forecast.py)
+  horizon_h: 8
+  step_h: 0.5
+  every_h: 2              # training/eval time points every 2 h (neighbouring points are near copies)
+  interval: 0.8           # +- this quantile of train out-of-fold |error| per horizon
+  params: {max_depth: 6, n_estimators: 400, learning_rate: 0.05, min_child_weight: 5,
+           subsample: 0.8, colsample_bytree: 0.8, reg_lambda: 5}
+
 tree: {max_depth: [1, 2, 3], min_samples_leaf: [5, 10, 15, 20]}   # chosen by train fold-OOF r2
 dummy: {n_dummy: 3, n_seeds: 10, flag_frac: 0.7}
 
