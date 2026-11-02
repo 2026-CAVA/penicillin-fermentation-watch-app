@@ -212,3 +212,29 @@ def test_rule_tree_beats_mean_or_is_marked():
     r = read_json(ART / "rules.json")
     assert r["r2"]["val"] > 0 or r["reference_only"]
     assert r["reference_only"] == (not r["r2"]["val"] > 0)
+
+
+def test_api_matches_mockup_contract(s):
+    """Key sets of the FermentIQ mockup (BatchSummary, series rows, SHAP items); scoreCuts is our addition."""
+    from fastapi.testclient import TestClient
+    from main.api import app
+    c, bid = TestClient(app), s["split"]["val"][0]
+    summary = {"id", "runStatus", "elapsedH", "plannedEndH", "state", "predictedFinal", "latestScore",
+               "finalMeasured", "firstAnomalyH", "anomalyDurationH", "segments", "scoreCuts"}
+    rows = c.get("/batches").json()
+    assert len(rows) == 100 and all(set(r) == summary for r in rows)
+    d = c.get(f"/batches/{bid}").json()
+    assert set(d) == summary | {"intervalH", "series"}
+    assert set(d["series"][0]) == {"t", "pH", "DO", "temperature", "feedRate", "penicillin", "score", "state",
+                                   "predictedFinal"}
+    assert {x["state"] for x in d["series"]} <= {"normal", "caution", "anomaly"}
+    seg = d["segments"]
+    assert seg[0]["start"] == d["series"][0]["t"] and all(a["end"] == b["start"] for a, b in zip(seg, seg[1:]))
+    t_cut = s["split"]["t_cut"]
+    assert all((x["predictedFinal"] is None) == (x["t"] < t_cut) for x in d["series"])
+    sh = c.get(f"/batches/{bid}/shap?t=50").json()
+    assert len(sh) == 5 and set(sh[0]) == {"feature", "label", "value"}
+    r = c.post("/simulate", json={"batch_id": bid, "changes": {"Fpaa_tot": 0.05}})
+    assert r.status_code == 200 and "delta" in r.json()
+    assert c.post("/simulate", json={"batch_id": bid, "changes": {"Fs_tot": 0.05}}).status_code == 422
+    assert c.get("/batches/999").status_code == 404

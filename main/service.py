@@ -3,13 +3,14 @@
     list_batches() -> list[dict]
     batch_view(batch_id) -> dict
     run_whatif(batch_id, changes) -> dict     changes = {"Fpaa_tot": 0.05, ...}  (relative, +5%)
+    summary(batch_id), detail(batch_id), shap_top(batch_id) -> FermentIQ mockup shapes (served by main.api)
 """
 from functools import cache
 
 import numpy as np
 import pandas as pd
 
-from main.data import ART, DATA, cfg, load_split, load_ts, offline_available, read_json
+from main.data import ART, DATA, DT, cfg, load_split, load_ts, offline_available, read_json
 from main.model import load_xgb, shap_values, top_k_drivers
 from main.warning import GRADES, band_at, deviation, load_bands, risk_contrib
 from main.whatif import response_curve, rule_whatif, rule_whatif_by_var, whatif_predict
@@ -112,3 +113,52 @@ def run_whatif(batch_id, changes):
         raise ValueError(f"not a slider feature: {sorted(unknown)}")
     model, _, source = _route(batch_id)
     return {"pred_source": source, **whatif_predict(model, _state()["X"].loc[batch_id], changes, _state()["bounds"])}
+
+
+# --- FermentIQ mockup contract (GET /batches, /batches/{id}, /batches/{id}/shap) ------------------
+# Values stay in this process's units: yield kg, score = R(t) 0-100 with `scoreCuts`, temperature K.
+
+STATE = {"STABLE": "normal", "WARNING": "caution", "CRITICAL": "anomaly"}
+SERIES = {"pH": "pH", "DO": "DO", "temperature": "T", "feedRate": "Fs", "penicillin": "P_off"}  # mock key -> column
+
+
+@cache
+def _y_pred(batch_id):
+    model, _, _ = _route(batch_id)
+    return float(model.predict(_state()["X"].loc[[batch_id]].astype(float))[0])
+
+
+def summary(batch_id):
+    """One row of the batch list. A finished batch: elapsedH = plannedEndH = last time point."""
+    s = _state()
+    rk = s["risk"][s["risk"].batch == batch_id]
+    state, t = rk.grade.map(STATE), rk.t.to_numpy()
+    first = np.flatnonzero(state.ne(state.shift()).to_numpy())  # start of each run of one state
+    ends = [*t[first[1:]], t[-1] + DT]  # a segment ends where the next one starts
+    anomaly = t[(state == "anomaly").to_numpy()]
+    return {"id": int(batch_id), "runStatus": "completed", "elapsedH": float(t[-1]), "plannedEndH": float(t[-1]),
+            "state": STATE[max(rk.grade, key=list(GRADES).index)], "predictedFinal": _y_pred(batch_id),
+            "latestScore": float(rk.R.iloc[-1]), "scoreCuts": s["th"]["cuts"],
+            "finalMeasured": float(s["table"].y[batch_id]),
+            "firstAnomalyH": float(anomaly[0]) if len(anomaly) else None, "anomalyDurationH": len(anomaly) * DT,
+            "segments": [{"start": float(t[i]), "end": float(e), "state": state.iloc[i]} for i, e in zip(first, ends)]}
+
+
+def detail(batch_id):
+    """summary + one row per time point. penicillin = offline P as known in real time (4 h delay, held);
+    predictedFinal exists from t_cut on (the model predicts once, at t_cut)."""
+    s = _state()
+    ts = offline_available(s["ts"][s["ts"].batch == batch_id]).reset_index(drop=True)
+    rk = s["risk"][s["risk"].batch == batch_id].reset_index(drop=True)
+    rows = pd.DataFrame({"t": ts.t, **{k: ts[c] for k, c in SERIES.items()}, "score": rk.R,
+                         "state": rk.grade.map(STATE),
+                         "predictedFinal": np.where(ts.t >= s["split"]["t_cut"], _y_pred(batch_id), np.nan)})
+    rows = rows.astype(object).where(rows.notna(), None)
+    return {**summary(batch_id), "intervalH": DT, "series": rows.to_dict("records")}
+
+
+def shap_top(batch_id, k=5):
+    """Yield SHAP (one per batch, not per time point), largest |value| first."""
+    model, _, _ = _route(batch_id)
+    sh = shap_values(model, _state()["X"].loc[[batch_id]].astype(float)).iloc[0].drop("_base")
+    return [{"feature": f, "label": f, "value": float(sh[f])} for f in sh.abs().sort_values(ascending=False).index[:k]]

@@ -1,6 +1,7 @@
-"""Pipeline CLI: python -m main {prepare,check,warning,quality,explain,test,all} ...
+"""Pipeline CLI: python -m main {prepare,check,warning,quality,explain,test,serve,all} ...
 
 all = prepare warning quality explain. `test` (one-time test-set evaluation) and `check` run only on request.
+serve = HTTP API (main.api) on http://127.0.0.1:8000, reads the files the steps wrote.
 Each step reads the previous step's files in data/cache/ and artifacts/ and prints its results.
 """
 import argparse
@@ -276,8 +277,14 @@ def run_test():
           f"r2 {ci['r2'][0]:.3f}-{ci['r2'][1]:.3f}")
 
 
+def run_serve():
+    """HTTP API for the front end (main.api)."""
+    import uvicorn
+    uvicorn.run("main.api:app", host="127.0.0.1", port=8000)
+
+
 STEPS = {"prepare": run_prepare, "check": run_check, "warning": run_warning, "quality": run_quality,
-         "explain": run_explain, "test": run_test}
+         "explain": run_explain, "test": run_test, "serve": run_serve}
 ALL = ["prepare", "warning", "quality", "explain"]
 
 if __name__ == "__main__":
