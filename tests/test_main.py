@@ -224,7 +224,7 @@ def test_api_matches_mockup_contract(s):
     rows = c.get("/batches").json()
     assert len(rows) == 100 and all(set(r) == summary for r in rows)
     d = c.get(f"/batches/{bid}").json()
-    assert set(d) == summary | {"intervalH", "shapBase", "seriesMeta", "series"}
+    assert set(d) == summary | {"intervalH", "shapBase", "explanation", "seriesMeta", "series"}
     assert set(d["seriesMeta"]) == set(d["series"][0]) - {"t", "score", "state", "predictedFinal"}
     assert set(d["series"][0]) == {"t", "pH", "DO", "temperature", "feedRate", "penicillin", "score", "state",
                                    "predictedFinal"}
