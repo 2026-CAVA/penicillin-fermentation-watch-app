@@ -104,13 +104,14 @@ from main.service import list_batches, batch_view, run_whatif
 
 list_batches()                    # [{batch_id, group, is_fault, split, tag}, ...]
 batch_view(92)                    # 배치 하나의 화면 데이터 (JSON 직렬화 가능한 dict)
-run_whatif(92, {"Fs_tot": 0.05})  # 슬라이더: 전반부 설탕 공급 +5%
+run_whatif(92, {"Fpaa_tot": 0.05})  # 슬라이더: 전반부 PAA 공급 +5%
 ```
 
 - 저장소 폴더(`back`)를 작업 위치로 두고 실행합니다. 학습은 하지 않고 `data/cache/`와 `artifacts/`만 읽습니다.
 - `batch_view` 주요 키: `pred_source`(학습 배치는 `"oof"` = 그 배치를 빼고 학습한 모델, 그 외 `"final"`), `tag`, `light_final` / `light_worst`, `y_pred_kg` / `y_true_kg`, `t`, `series`(변수별 값·밴드·안전선), `risk`(R(t)·등급·경보 원인 Top 3), `shap_top3`, `rule`, `whatif`(슬라이더 범위·반응 곡선, 규칙 What-if).
 - 화면 문구(꼬리표, 안내, 슬라이더 이름)는 영어입니다. 슬라이더 이름은 `config.yaml`의 `sliders`에서 바꿉니다.
-- 설탕 공급(`Fs_tot`)을 늘리면 늘어난 양(L)만큼 전반부 끝 부피 `V_last`(L)와 무게 `Wt_last`(kg, 밀도 약 1 kg/L 가정)도 함께 늘린 뒤 예측합니다. `run_whatif` 결과의 `inputs`에 `V_last`·`Wt_last`가 `linked_to: "Fs_tot"`로 함께 나오고, 반응 곡선도 같은 방식으로 계산합니다. 비율은 `main/whatif.py`의 `COUPLED`에서 바꿉니다.
+- 슬라이더는 학습 배치마다 값이 다른 전반부 조작 변수입니다: PAA·산·염기·냉각수·가열수 총량(`Fpaa_tot`, `Fa_tot`, `Fb_tot`, `Fc_tot`, `Fh_tot`). 산·염기·냉각수·가열수는 pH·온도 제어기가 정하는 값입니다. 설탕·오일·주입수·통기·압력은 0~t_cut 동안 모든 배치가 같은 레시피라서 빠졌고, 학습 범위가 한 점인 슬라이더는 `service`가 자동으로 뺍니다.
+- (설탕이 다시 슬라이더가 되면) 설탕 공급(`Fs_tot`)을 늘리면 늘어난 양(L)만큼 전반부 끝 부피 `V_last`(L)와 무게 `Wt_last`(kg, 밀도 약 1 kg/L 가정)도 함께 늘린 뒤 예측합니다. `run_whatif` 결과의 `inputs`에 `V_last`·`Wt_last`가 `linked_to: "Fs_tot"`로 함께 나오고, 반응 곡선도 같은 방식으로 계산합니다. 비율은 `main/whatif.py`의 `COUPLED`에서 바꿉니다.
 
 ## Appendix
 

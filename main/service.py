@@ -2,7 +2,7 @@
 
     list_batches() -> list[dict]
     batch_view(batch_id) -> dict
-    run_whatif(batch_id, changes) -> dict     changes = {"Fs_tot": 0.05, ...}  (relative, +5%)
+    run_whatif(batch_id, changes) -> dict     changes = {"Fpaa_tot": 0.05, ...}  (relative, +5%)
 """
 from functools import cache
 
@@ -28,9 +28,13 @@ def _state():
             "th": read_json(ART / "thresholds.json"), "split": split, "bands": load_bands(ART / "bands.npz"),
             "final": load_xgb(ART / "xgb.json"),
             "folds": {k: load_xgb(ART / f"xgb_fold{k}.json") for k in range(cfg()["split"]["n_folds"])},
-            "rules": read_json(ART / "rules.json"),
-            "bounds": {f: (float(X.loc[split["train"], f].min()), float(X.loc[split["train"], f].max()))
-                       for f in cfg()["sliders"]}}
+            "rules": read_json(ART / "rules.json"), "bounds": slider_bounds(X.loc[split["train"]], cfg()["sliders"])}
+
+
+def slider_bounds(X_train, sliders):
+    """Train [min, max] per slider; a slider whose train values are all equal is dropped (nothing to move)."""
+    b = {f: (float(X_train[f].min()), float(X_train[f].max())) for f in sliders}
+    return {f: (lo, hi) for f, (lo, hi) in b.items() if lo < hi}
 
 
 def _route(batch_id):
@@ -89,10 +93,10 @@ def batch_view(batch_id):
         "whatif": {
             "note": "Computed from patterns the model learned, not a causal effect. "
                     "Only first-half (0 to t_cut) operation is changed. "
-                    "Added sugar feed also raises the end-of-half volume (V_last) and weight (Wt_last).",
-            "sliders": [{"feature": f, "label": lab, "value": float(x[f]), "min": s["bounds"][f][0],
-                         "max": s["bounds"][f][1], "curve": response_curve(model, x, f, s["bounds"])}
-                        for f, lab in cfg()["sliders"].items()],
+                    "Acid, base, cooling and heating water flows are set by the pH and temperature controllers.",
+            "sliders": [{"feature": f, "label": cfg()["sliders"][f], "value": float(x[f]), "min": lo, "max": hi,
+                         "curve": response_curve(model, x, f, s["bounds"])}
+                        for f, (lo, hi) in s["bounds"].items()],
             "rule_by_var": rule_whatif_by_var(ts, ranges, cuts, persist).to_dict("records"),
             "rule_all": rule_whatif(ts, ranges, cuts, persist=persist),
             "rule_note": "Per-variable reductions do not add up: a time point with several excursions "
@@ -102,7 +106,7 @@ def batch_view(batch_id):
 
 
 def run_whatif(batch_id, changes):
-    unknown = set(changes) - set(cfg()["sliders"])
+    unknown = set(changes) - set(_state()["bounds"])
     if unknown:
         raise ValueError(f"not a slider feature: {sorted(unknown)}")
     model, _, source = _route(batch_id)

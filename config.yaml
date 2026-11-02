@@ -94,16 +94,18 @@ features:                 # computed on 0 <= t <= t_cut
   mean: [DO, pH, T, OUR, CER, CO2outgas, O2, pressure, Fg]
   min: [DO]
   last: [OUR, CER, V, Wt]
-  total: [Fs, Foil, Fpaa, Fw, Fremoved]      # sum x dt
+  total: [Fs, Foil, Fpaa, Fw, Fremoved, Fa, Fb, Fc, Fh]   # sum x dt
   offline_last: [P_off, X_off, Visc_off, PAA_off, NH3_off]
 
-sliders:                  # manipulated inputs only, one feature per variable
-  Fs_tot: "First-half total sugar feed (L)"
-  Foil_tot: "First-half total oil feed (L)"
+# Manipulated inputs only, one feature per variable. Fs, Foil, Fw, Fg, pressure follow one recipe over
+# 0..t_cut (same value in every train batch), so they cannot be sliders; the service also drops any
+# slider whose train range is a single point. Fa/Fb/Fc/Fh are set by the pH and temperature controllers.
+sliders:
   Fpaa_tot: "First-half total PAA feed (L)"
-  Fw_tot: "First-half total water for injection (L)"
-  Fg_mean: "First-half mean aeration rate (L/h)"
-  pressure_mean: "First-half mean head pressure (bar)"
+  Fa_tot: "First-half total acid flow (L)"
+  Fb_tot: "First-half total base flow (L)"
+  Fc_tot: "First-half total cooling water flow (L)"
+  Fh_tot: "First-half total heating water flow (L)"
 
 xgb:
   fixed: {max_depth: 2, n_estimators: 300, learning_rate: 0.05, min_child_weight: 5,

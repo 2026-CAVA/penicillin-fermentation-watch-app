@@ -12,7 +12,7 @@ from main.data import (ART, DATA, META, batch_meta, build_batch_table, cfg, load
                        offline_available, read_json)
 from main.model import load_xgb, oof_predict
 from main.warning import band_flags, deviation, load_bands, resolve_ranges, risk_score, sustained, warning_metrics
-from main.whatif import rule_whatif, rule_whatif_by_var, whatif_predict
+from main.whatif import response_curve, rule_whatif, rule_whatif_by_var, whatif_predict
 
 
 @pytest.fixture(scope="module")
@@ -121,6 +121,16 @@ def test_whatif_zero_change_and_bounds(s):
     for f, io in whatif_predict(st["final"], x, {f: 50.0 for f in st["bounds"]}, st["bounds"])["inputs"].items():
         if "linked_to" not in io:  # linked features (V_last, Wt_last) follow the slider and are not clipped
             assert st["bounds"][f][0] <= io["after"] <= st["bounds"][f][1]
+
+
+def test_sliders_move(s):
+    """Every configured slider has a train range wider than a point and moves the prediction somewhere."""
+    st = service._state()
+    assert service.slider_bounds(pd.DataFrame({"a": [1, 1], "b": [1, 2]}), ["a", "b"]) == {"b": (1.0, 2.0)}
+    assert set(st["bounds"]) == set(cfg()["sliders"])
+    for f in st["bounds"]:
+        spans = [np.ptp(response_curve(st["final"], st["X"].loc[b], f, st["bounds"])["y"]) for b in s["split"]["val"]]
+        assert max(spans) > 0, f
 
 
 def test_whatif_sugar_raises_volume_and_weight():
