@@ -283,3 +283,9 @@ def test_runs_and_events(s):
         assert (ex["first_alarm_h"] is None) == (rk.grade == "STABLE").all()
         if ex["first_alarm_h"] is not None:
             assert ex["first_alarm_h"] == rk.t[rk.grade != "STABLE"].iloc[0] and ex["causes"]
+
+
+def test_cross_check_saved():
+    m = service.model_info()["cross_check"]
+    assert set(m["overlap"]) == {"top3", "top5"} and all(0 <= v <= 1 for v in m["overlap"].values())
+    assert [t["shap_rank"] for t in m["top"]] == [1, 2, 3, 4, 5] and all(t["label"] for t in m["top"])

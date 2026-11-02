@@ -106,6 +106,27 @@ def fit_rule_tree(X, y, max_depth=3, min_samples_leaf=5, seed=0):
     return DecisionTreeRegressor(max_depth=max_depth, min_samples_leaf=min_samples_leaf, random_state=seed).fit(X, y)
 
 
+def _sign_corr(a, b):
+    with np.errstate(divide="ignore", invalid="ignore"):
+        c = np.corrcoef(np.asarray(a, float), np.asarray(b, float))[0, 1]
+    return int(np.sign(c)) if np.isfinite(c) else 0  # 0 = constant feature
+
+
+def cross_check(model, X, y, X_train, y_train, seed=0, n_repeats=30, ks=(3, 5)):
+    """Permutation importance (RMSE increase, kg) vs mean |SHAP| on the same batches: top-k overlap, and per
+    top feature the SHAP direction (sign of corr(x, SHAP)) next to the raw train direction (sign of corr(x, y))."""
+    from sklearn.inspection import permutation_importance
+    pi = permutation_importance(model, X, y, scoring="neg_root_mean_squared_error", n_repeats=n_repeats,
+                                random_state=seed)
+    perm = pd.Series(pi.importances_mean, index=X.columns).sort_values(ascending=False)
+    sh = shap_values(model, X).drop(columns="_base")
+    imp = sh.abs().mean().sort_values(ascending=False)
+    top = [{"feature": f, "shap_rank": i + 1, "perm_rank": int(perm.index.get_loc(f)) + 1, "shap_kg": float(imp[f]),
+            "perm_rmse_kg": float(perm[f]), "shap_direction": _sign_corr(X[f], sh[f]),
+            "data_direction": _sign_corr(X_train[f], y_train)} for i, f in enumerate(imp.index[:max(ks)])]
+    return {"overlap": {f"top{k}": len(set(imp.index[:k]) & set(perm.index[:k])) / k for k in ks}, "top": top}
+
+
 def select_rule_tree(X, y, fold, grid, seed=0):
     """(max_depth, min_samples_leaf) with the best fold-OOF r2 on train; ties go to the fewest leaves,
     then the smallest depth."""

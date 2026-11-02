@@ -207,6 +207,10 @@ def model_info():
             "alarm": {"cuts": th["cuts"], "persist_points": th["persist"], "persist_h": th["persist"] * DT,
                       "band_rule": th["band_rule"], "val_false_alarms": th["val_far"]},
             "rule_tree": {"r2": r["r2"], "reference_only": r["reference_only"]},
+            "cross_check": {**(cc := read_json(ART / "cross_check.json")),
+                            "top": [{**t, "label": feature_label(t["feature"])} for t in cc["top"]],
+                            "note": f"Validation set ({len(s['split']['val'])} batches): reference only. "
+                                    "Directions: +1 = higher value, higher yield; 0 = constant feature."},
             "sliders": list(s["bounds"]), "demo_batches": cfg()["demo_batches"]}
 
 

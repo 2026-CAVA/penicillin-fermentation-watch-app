@@ -13,7 +13,7 @@ import pandas as pd
 
 from main.data import (ART, DATA, DT, assemble, batch_meta, batch_yield_kg, cfg, feature_cols, load_raw,
                        load_split, load_ts, make_split, names, offline_available, raw_path, read_json, write_json)
-from main.model import (baselines, bootstrap_ci, dummy_check, export_rules, fit_rule_tree, global_importance,
+from main.model import (baselines, bootstrap_ci, cross_check, dummy_check, export_rules, fit_rule_tree, global_importance,
                         load_xgb, make_xgb, metrics, oof_predict, search_params, select_rule_tree, shap_values)
 from main.warning import (band_alarm, band_flags, combine, deviation, fit_band, lowest_cut, resolve_ranges,
                           risk_grade, risk_score, save_bands, sustained, warning_metrics)
@@ -226,6 +226,8 @@ def run_explain():
         "reference_only": reference_only,
         "leaf": {str(b): int(l) for b, l in zip(X.index, tree.apply(X))}})
     dc = dummy_check(X.loc[tr], y.loc[tr], q["params"], **dummy_cfg)
+    cc = cross_check(load_xgb(ART / "xgb.json"), X.loc[va], y.loc[va], X.loc[tr], y.loc[tr], c["seed"])
+    write_json(ART / "cross_check.json", cc)
 
     top = global_importance(sh).head(5)
     meaningless = set(dc.index[dc.meaningless])
@@ -235,6 +237,9 @@ def run_explain():
           f"train cv r2 {cv_r2:.3f}, val r2 {r2['val']:.3f}{' (reference only)' if reference_only else ''}")
     for r in rules:
         print(f"- {r['text']}")
+    print(f"SHAP vs permutation on val: top3 overlap {cc['overlap']['top3']:.0%}, top5 {cc['overlap']['top5']:.0%}; "
+          f"SHAP direction = train data direction for "
+          f"{sum(t['shap_direction'] == t['data_direction'] for t in cc['top'])}/{len(cc['top'])} of the SHAP top 5")
     print(f"dummy check: {len(meaningless)}/{len(dc)} features meaningless "
           f"(sliders: {len(meaningless & sliders)}/{len(sliders)})")
 
