@@ -136,6 +136,46 @@ def lowest_cut(r, target, start=1):
     return 101
 
 
+def fit_warning(ts, rt, train, fold, tune, c):
+    """The whole alarm setup from `train` normal batches: bands (full + per fold in `fold`), safety ranges,
+    risk per time point of every batch in ts, and cuts / band rule from batch-level targets on `tune`.
+    ts: raw series, rt: offline_available(ts). A batch in `fold` is flagged with the band that left it out.
+    Returns bands, ranges, risk (with grades), rule = {cuts, persist, band_rule}."""
+    bc, w = c["band"], c["warning"]
+
+    def band(batches):
+        return fit_band(ts, batches, bc["vars"], bc["k"], bc["min_n"], bc["std_floor_q"])
+
+    bands = {"full": band(train)} | {f"fold{k}": band([b for b in train if fold[b] != k])
+                                     for k in sorted(set(fold.values()))}
+    ranges = resolve_ranges(rt[rt.batch.isin(train)], c["safety"])
+    flags = pd.concat([band_flags(g, bands[f"fold{fold[b]}"] if b in fold else bands["full"])
+                       for b, g in ts.groupby("batch")]).loc[ts.index]
+    risk = ts[["batch", "k", "t", "fault_ref"]].join(flags)
+    risk["R"] = risk_score(deviation(rt, ranges), ranges)
+    risk["band_n"] = (flags != 0).sum(axis=1)
+
+    n = w["persist"]
+    held = sustained(risk.R, risk.batch, n)  # R(t) grades count only after n consecutive points
+    v = risk.batch.isin(tune)
+    tb, th, tn = risk.batch[v], held[v], risk.band_n[v]
+
+    def batch_rate(alarm):  # share of tuning batches with at least one alarm point
+        return alarm.groupby(tb).any().mean()
+
+    peak = th.groupby(tb).max()
+    warn = lowest_cut(peak, w["far_warning"])
+    crit = lowest_cut(peak, w["far_critical"], start=warn + 1)
+    rule = next(((nv, k) for nv in w["band_n_vars"] for k in w["band_consec"]
+                 if batch_rate((th >= warn) | band_alarm(tn, tb, nv, k)) <= w["far_warning"]),
+                (len(bc["vars"]) + 1, 1))  # nothing fits: band never raises the signal
+    risk["band_alarm"] = band_alarm(risk.band_n, risk.batch, *rule)
+    risk["grade_r"] = risk_grade(held, [warn, crit])
+    risk["grade"] = combine(risk.grade_r, risk.band_alarm)
+    return bands, ranges, risk, {"cuts": [warn, crit], "persist": n,
+                                 "band_rule": {"n_vars": rule[0], "consec": rule[1]}}
+
+
 def warning_metrics(risk_ts, alarm, fault_batches, normal_batches):
     """alarm: bool Series aligned to risk_ts (needs batch, t, fault_ref)."""
     d = risk_ts.assign(alarm=alarm.to_numpy())

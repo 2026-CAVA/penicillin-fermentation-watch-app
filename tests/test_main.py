@@ -203,15 +203,17 @@ def test_test_step_on_synthetic_batches(s, tmp_path, monkeypatch, capsys):
         monkeypatch.setattr(mod, "DATA", data_dir)
     monkeypatch.setattr(pipeline, "ART", art_dir)
     monkeypatch.setitem(cfg(), "demo_batches", [normals[0], 901])
+    real = {f: (ART / f).read_bytes() if (ART / f).exists() else None
+            for f in ("test_evaluated.json", "test_results.json")}  # the real one-time run, if done
 
     pipeline.run_test()
     out = capsys.readouterr().out
     print(out)  # shown with `pytest -rP`
     assert "test: 5 normal + 3 fault batches" in out and "combined_warning+: detected" in out
-    assert (art_dir / "test_evaluated.json").exists() and not (ART / "test_evaluated.json").exists()
+    assert (art_dir / "test_evaluated.json").exists()
     res = read_json(art_dir / "test_results.json")
     assert len(res["verdicts"]) == 7 and "normal 161 h" in res["yield_trend"] and "fault 8" in res["forecast"]
-    assert not (ART / "test_results.json").exists()
+    assert real == {f: (ART / f).read_bytes() if (ART / f).exists() else None for f in real}  # untouched
     with pytest.raises(SystemExit):  # second run refused
         pipeline.run_test()
 
