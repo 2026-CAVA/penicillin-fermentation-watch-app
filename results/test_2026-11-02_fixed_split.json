@@ -1,0 +1,418 @@
+{
+  "demo_batches": [
+    6,
+    92,
+    62
+  ],
+  "n_normal": 15,
+  "n_fault": 10,
+  "criteria": {
+    "normal_warning_max": 0.2,
+    "normal_critical_max": 0.14,
+    "trend_r2_min": 0.0,
+    "yield_coverage_min": 0.6,
+    "forecast_coverage": [
+      0.7,
+      0.9
+    ]
+  },
+  "alarms": {
+    "combined_warning+": {
+      "far_points": 0.0,
+      "far_batches": 0.0,
+      "batch_detection": 0.7,
+      "sensitivity_points": 0.3447452229299363,
+      "lead_time_h_median": 7.200000000000003,
+      "detected_after_onset": 7.0,
+      "n_fault_batches": 10.0
+    },
+    "combined_critical": {
+      "far_points": 0.0,
+      "far_batches": 0.0,
+      "batch_detection": 0.7,
+      "sensitivity_points": 0.34076433121019106,
+      "lead_time_h_median": 7.400000000000006,
+      "detected_after_onset": 7.0,
+      "n_fault_batches": 10.0
+    },
+    "r_only_warning+": {
+      "far_points": 0.0,
+      "far_batches": 0.0,
+      "batch_detection": 0.7,
+      "sensitivity_points": 0.3447452229299363,
+      "lead_time_h_median": 7.200000000000003,
+      "detected_after_onset": 7.0,
+      "n_fault_batches": 10.0
+    },
+    "band_only": {
+      "far_points": 0.0,
+      "far_batches": 0.0,
+      "batch_detection": 0.0,
+      "sensitivity_points": 0.0,
+      "lead_time_h_median": NaN,
+      "detected_after_onset": 0.0,
+      "n_fault_batches": 10.0
+    }
+  },
+  "yield": {
+    "normal xgboost": {
+      "rmse": 733.9946572908568,
+      "mae": 571.8056473822916,
+      "mape": 31.346989636484967,
+      "r2": 0.4607973837275925
+    },
+    "normal baseline_mean": {
+      "rmse": 1016.7930314690863,
+      "mae": 849.3134011092222,
+      "mape": 46.27726376670386,
+      "r2": -0.03474018505476506
+    },
+    "normal baseline_ridge": {
+      "rmse": 555.7746627634084,
+      "mae": 456.184291590792,
+      "mape": 23.07962099823639,
+      "r2": 0.6908539648428301
+    },
+    "normal baseline_offline_p": {
+      "rmse": 599.1102325706273,
+      "mae": 511.02102253403046,
+      "mape": 26.116226465186337,
+      "r2": 0.6407641523478642
+    },
+    "fault xgboost": {
+      "rmse": 846.1354219131509,
+      "mae": 734.363133117344,
+      "mape": 77.28927032946815,
+      "r2": 0.4430131138620734
+    },
+    "fault baseline_mean": {
+      "rmse": 1675.9251446742005,
+      "mae": 1465.377238757,
+      "mape": 163.0973897879072,
+      "r2": -1.1851157694986347
+    },
+    "fault baseline_ridge": {
+      "rmse": 443.5773475612628,
+      "mae": 362.87734856039384,
+      "mape": 35.16240055240234,
+      "r2": 0.8469251168095144
+    },
+    "fault baseline_offline_p": {
+      "rmse": 669.3125501805811,
+      "mae": 561.9910704053236,
+      "mape": 53.10923391107616,
+      "r2": 0.6514836521709784
+    },
+    "all xgboost": {
+      "rmse": 780.7861135070037,
+      "mae": 636.8286416763126,
+      "mape": 49.72390191367825,
+      "r2": 0.5573451056032407
+    },
+    "all baseline_mean": {
+      "rmse": 1320.5343151644915,
+      "mae": 1095.7389361683333,
+      "mape": 93.00531417518519,
+      "r2": -0.266194700629935
+    },
+    "all baseline_ridge": {
+      "rmse": 513.8439751224707,
+      "mae": 418.86151437863276,
+      "mape": 27.912732819902768,
+      "r2": 0.8082816658810174
+    },
+    "all baseline_offline_p": {
+      "rmse": 628.1333921980201,
+      "mae": 531.4090416825478,
+      "mape": 36.91342944354226,
+      "r2": 0.713513031256862
+    }
+  },
+  "yield_ci95_normal": {
+    "rmse": [
+      471.95466506066515,
+      955.2124040858022
+    ],
+    "r2": [
+      0.16627271116001294,
+      0.601570743741637
+    ]
+  },
+  "yield_trend": {
+    "normal 115 h": {
+      "rmse": 733.9946572908568,
+      "mae": 571.8056473822916,
+      "mape": 31.346989636484967,
+      "r2": 0.4607973837275925,
+      "coverage_range": 0.6666666666666666,
+      "coverage_spread": 0.26666666666666666
+    },
+    "fault 115 h": {
+      "rmse": 846.1354219131509,
+      "mae": 734.363133117344,
+      "mape": 77.28927032946815,
+      "r2": 0.4430131138620734,
+      "coverage_range": 0.5,
+      "coverage_spread": 0.2
+    },
+    "normal 138 h": {
+      "rmse": 461.96895499877513,
+      "mae": 412.70875592968747,
+      "mape": 18.76368364657149,
+      "r2": 0.7864046587883586,
+      "coverage_range": 0.9333333333333333,
+      "coverage_spread": 0.2
+    },
+    "fault 138 h": {
+      "rmse": 660.4131334045846,
+      "mae": 566.5242576392188,
+      "mape": 62.55987514087642,
+      "r2": 0.6606900305578904,
+      "coverage_range": 0.6,
+      "coverage_spread": 0.1
+    },
+    "normal 161 h": {
+      "rmse": 380.86831566576154,
+      "mae": 308.31647891145826,
+      "mape": 13.347506637052826,
+      "r2": 0.8548169606392957,
+      "coverage_range": 0.8,
+      "coverage_spread": 0.3333333333333333
+    },
+    "fault 161 h": {
+      "rmse": 633.6534356109735,
+      "mae": 589.1281760962501,
+      "mape": 60.073660232591195,
+      "r2": 0.6876303685239942,
+      "coverage_range": 0.3,
+      "coverage_spread": 0.1
+    }
+  },
+  "forecast": {
+    "normal 0.5": {
+      "rmse": 0.2500409615270339,
+      "rmse_persistence": 1.5809882895933698,
+      "rmse_linear": 0.5562988583785106,
+      "coverage": 0.7641234711706465
+    },
+    "normal 1": {
+      "rmse": 0.25674261906780227,
+      "rmse_persistence": 1.6642101222076375,
+      "rmse_linear": 0.5903443009584489,
+      "coverage": 0.7588817705299942
+    },
+    "normal 1.5": {
+      "rmse": 0.2666515719377429,
+      "rmse_persistence": 1.7491490823131572,
+      "rmse_linear": 0.6257150015451416,
+      "coverage": 0.7556851311953353
+    },
+    "normal 2": {
+      "rmse": 0.2743916377543126,
+      "rmse_persistence": 1.8052912612969758,
+      "rmse_linear": 0.6485775511497391,
+      "coverage": 0.7498542274052478
+    },
+    "normal 2.5": {
+      "rmse": 0.2811231400720661,
+      "rmse_persistence": 1.865104097730054,
+      "rmse_linear": 0.6728849394057786,
+      "coverage": 0.7596944770857814
+    },
+    "normal 3": {
+      "rmse": 0.2932140800186851,
+      "rmse_persistence": 1.9491307936928728,
+      "rmse_linear": 0.7088104620657454,
+      "coverage": 0.7673325499412456
+    },
+    "normal 3.5": {
+      "rmse": 0.29687684627073196,
+      "rmse_persistence": 2.0347358054113682,
+      "rmse_linear": 0.7460255890725365,
+      "coverage": 0.7611764705882353
+    },
+    "normal 4": {
+      "rmse": 0.30049212475489356,
+      "rmse_persistence": 2.091142008324414,
+      "rmse_linear": 0.7710905322297326,
+      "coverage": 0.7623529411764706
+    },
+    "normal 4.5": {
+      "rmse": 0.3104890403094195,
+      "rmse_persistence": 2.153019537607645,
+      "rmse_linear": 0.7983229716248285,
+      "coverage": 0.7593360995850622
+    },
+    "normal 5": {
+      "rmse": 0.3227404594651738,
+      "rmse_persistence": 2.2379847844743694,
+      "rmse_linear": 0.8362499038755842,
+      "coverage": 0.7504445761707172
+    },
+    "normal 5.5": {
+      "rmse": 0.33288222855305444,
+      "rmse_persistence": 2.324638431369315,
+      "rmse_linear": 0.8755365740778592,
+      "coverage": 0.7537091988130564
+    },
+    "normal 6": {
+      "rmse": 0.33917371373220345,
+      "rmse_persistence": 2.381539925412638,
+      "rmse_linear": 0.9027920982234315,
+      "coverage": 0.7560830860534125
+    },
+    "normal 6.5": {
+      "rmse": 0.3454724622902337,
+      "rmse_persistence": 2.4443855775421883,
+      "rmse_linear": 0.9328650315845944,
+      "coverage": 0.757177033492823
+    },
+    "normal 7": {
+      "rmse": 0.356663745753422,
+      "rmse_persistence": 2.5297958090846175,
+      "rmse_linear": 0.9729814468458033,
+      "coverage": 0.7625598086124402
+    },
+    "normal 7.5": {
+      "rmse": 0.3641204103443346,
+      "rmse_persistence": 2.6170256909446437,
+      "rmse_linear": 1.014042904139833,
+      "coverage": 0.7586826347305389
+    },
+    "normal 8": {
+      "rmse": 0.3674134981644228,
+      "rmse_persistence": 2.6741793742332525,
+      "rmse_linear": 1.0434997976231155,
+      "coverage": 0.7580838323353294
+    },
+    "fault 0.5": {
+      "rmse": 0.31508884345256977,
+      "rmse_persistence": 1.390501794554835,
+      "rmse_linear": 0.552565123583352,
+      "coverage": 0.5681818181818182
+    },
+    "fault 1": {
+      "rmse": 0.33246011719076596,
+      "rmse_persistence": 1.4631771970384027,
+      "rmse_linear": 0.5879058932340627,
+      "coverage": 0.5594405594405595
+    },
+    "fault 1.5": {
+      "rmse": 0.3493923427939518,
+      "rmse_persistence": 1.5386934995891948,
+      "rmse_linear": 0.6254908665050235,
+      "coverage": 0.5416301489921121
+    },
+    "fault 2": {
+      "rmse": 0.36160506737834713,
+      "rmse_persistence": 1.5883887014316813,
+      "rmse_linear": 0.6506030398650909,
+      "coverage": 0.5337423312883436
+    },
+    "fault 2.5": {
+      "rmse": 0.3759205578100331,
+      "rmse_persistence": 1.6390447688676446,
+      "rmse_linear": 0.6779880651146566,
+      "coverage": 0.5326278659611993
+    },
+    "fault 3": {
+      "rmse": 0.39256336122585295,
+      "rmse_persistence": 1.7120790991802939,
+      "rmse_linear": 0.7163886757800552,
+      "coverage": 0.527336860670194
+    },
+    "fault 3.5": {
+      "rmse": 0.41370209480591846,
+      "rmse_persistence": 1.7882244471255833,
+      "rmse_linear": 0.7570980233321578,
+      "coverage": 0.5243147656940761
+    },
+    "fault 4": {
+      "rmse": 0.431940861723887,
+      "rmse_persistence": 1.838057347887757,
+      "rmse_linear": 0.7851060267825185,
+      "coverage": 0.5128205128205128
+    },
+    "fault 4.5": {
+      "rmse": 0.4457431164003608,
+      "rmse_persistence": 1.889994405097631,
+      "rmse_linear": 0.8148499626852767,
+      "coverage": 0.5151245551601423
+    },
+    "fault 5": {
+      "rmse": 0.4778908480345894,
+      "rmse_persistence": 1.9635288617064948,
+      "rmse_linear": 0.8559231628797616,
+      "coverage": 0.505338078291815
+    },
+    "fault 5.5": {
+      "rmse": 0.5002201672237794,
+      "rmse_persistence": 2.040293752304994,
+      "rmse_linear": 0.8994237167319904,
+      "coverage": 0.5093666369313113
+    },
+    "fault 6": {
+      "rmse": 0.51633976314657,
+      "rmse_persistence": 2.0903337795001398,
+      "rmse_linear": 0.9299629757149139,
+      "coverage": 0.504014272970562
+    },
+    "fault 6.5": {
+      "rmse": 0.5316353913302265,
+      "rmse_persistence": 2.143599480565833,
+      "rmse_linear": 0.9627133558004919,
+      "coverage": 0.5107719928186715
+    },
+    "fault 7": {
+      "rmse": 0.5550920834433372,
+      "rmse_persistence": 2.217221264425357,
+      "rmse_linear": 1.0061118343166189,
+      "coverage": 0.5098743267504489
+    },
+    "fault 7.5": {
+      "rmse": 0.5827460582925832,
+      "rmse_persistence": 2.293388613782945,
+      "rmse_linear": 1.052115919173793,
+      "coverage": 0.5175517551755175
+    },
+    "fault 8": {
+      "rmse": 0.5994792776678369,
+      "rmse_persistence": 2.3433906523406116,
+      "rmse_linear": 1.0848625951440574,
+      "coverage": 0.5121512151215122
+    }
+  },
+  "verdicts": {
+    "normal batches with WARNING+": {
+      "value": 0.0,
+      "pass": true
+    },
+    "normal batches with CRITICAL": {
+      "value": 0.0,
+      "pass": true
+    },
+    "yield RMSE minus best baseline (kg)": {
+      "value": 178.21999452744842,
+      "pass": false
+    },
+    "yield trend: lowest R2 over cutoffs": {
+      "value": 0.4607973837275925,
+      "pass": true
+    },
+    "yield 80% range: lowest coverage": {
+      "value": 0.6666666666666666,
+      "pass": true
+    },
+    "forecast: share of horizons beating both baselines": {
+      "value": 1.0,
+      "pass": true
+    },
+    "forecast 80% range: coverage min-max": {
+      "value": [
+        0.7498542274052478,
+        0.7673325499412456
+      ],
+      "pass": true
+    }
+  }
+}
