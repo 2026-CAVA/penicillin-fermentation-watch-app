@@ -102,7 +102,7 @@ def run_check():
 
 
 def run_warning():
-    """Bands (full + per fold), R(t), thresholds from false-alarm targets on val normal batches, frozen."""
+    """Bands (full + per fold), R(t), thresholds from batch-level false-alarm targets on normal batches, frozen."""
     c, w = cfg(), cfg()["warning"]
     ts, split = load_ts(), load_split()
     rt = offline_available(ts)
@@ -122,10 +122,11 @@ def run_warning():
     risk["R"] = risk_score(deviation(rt, ranges), ranges)
     risk["band_n"] = (flags != 0).sum(axis=1)
 
-    v, n = risk.batch.isin(split["val"]), w["persist"]
+    tune = [b for part in w["tune_on"] for b in split[part]]
+    v, n = risk.batch.isin(tune), w["persist"]
     held = sustained(risk.R, risk.batch, n)  # R(t) grades count only after n consecutive points
 
-    def batch_rate(alarm):  # share of val normal batches with at least one alarm point
+    def batch_rate(alarm):  # share of tuning normal batches with at least one alarm point
         return alarm[v].groupby(risk.batch[v]).any().mean()
 
     peak = held[v].groupby(risk.batch[v]).max()
@@ -139,17 +140,20 @@ def run_warning():
     risk["grade"] = combine(risk.grade_r, risk.band_alarm)
     risk.to_parquet(DATA / "risk_ts.parquet")
 
-    val = {name: warning_metrics(risk, a, [], split["val"]) for name, a in signals(risk).items()}
+    far = {part: {name: warning_metrics(risk, a, [], split[part]) for name, a in signals(risk).items()}
+           for part in ("train", "val")}
     write_json(ART / "thresholds.json", {
         "cuts": [warn, crit], "persist": n, "band_rule": {"n_vars": rule[0], "consec": rule[1]},
-        "ranges": ranges, "val_far": val})
+        "ranges": ranges, "tune_on": w["tune_on"], "val_far": far["val"], "train_far": far["train"]})
 
-    n_val, ww, cc = len(split["val"]), val["combined_warning+"], val["combined_critical"]
     print(f"R(t) cuts: WARNING >= {warn}, CRITICAL >= {crit}, held {n} points ({n * DT * 60:.0f} min); "
-          f"band rule: >= {rule[0]} vars for {rule[1]} points ({rule[1] * DT * 60:.0f} min)")
-    print(f"val normal false alarms: "
-          f"WARNING+ {ww['far_points']:.1%} of points, {ww['far_batches'] * n_val:.0f}/{n_val} batches; "
-          f"CRITICAL {cc['far_points']:.1%}, {cc['far_batches'] * n_val:.0f}/{n_val} batches")
+          + (f"band rule: >= {rule[0]} vars for {rule[1]} points ({rule[1] * DT * 60:.0f} min); "
+             if rule[0] <= len(bc["vars"]) else "band rule: off (no setting meets the target); ")
+          + f"tuned on {' + '.join(w['tune_on'])} normal batches")
+    for part in ("train", "val"):
+        nb, ww, cc = len(split[part]), far[part]["combined_warning+"], far[part]["combined_critical"]
+        print(f"{part} normal false alarms: WARNING+ {ww['far_batches'] * nb:.0f}/{nb} batches, "
+              f"CRITICAL {cc['far_batches'] * nb:.0f}/{nb} batches")
 
 
 def signals(risk):
