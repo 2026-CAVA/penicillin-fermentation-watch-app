@@ -6,6 +6,7 @@
     summary(batch_id), detail(batch_id), shap_top(batch_id) -> FermentIQ mockup shapes (served by main.api)
     model_info() -> dict                      model, target, val metrics, alarm rule, demo batches
     events(batch_id), explanation(batch_id)   excursion list, first-alarm sentence
+    compare(ids, vars), reference_batch(id)  series of several batches side by side
 """
 from functools import cache
 
@@ -287,3 +288,33 @@ def explanation(batch_id):
     if len(crit) and g != "CRITICAL":
         text += f" CRITICAL from {crit.iloc[0]:g} h, {len(crit) * DT:.1f} h in total."
     return {"text": text, "first_alarm_h": float(rk.t.iloc[i]), "reason": reason, "causes": causes}
+
+
+# --- batch comparison (P3) ---------------------------------------------------------------------------
+
+def reference_batch(batch_id):
+    """Default comparison partner: a normal batch of the same control group with the closest length."""
+    s = _state()
+    m = s["table"].assign(t_end=s["ts"].groupby("batch").t.max())
+    c = m[(m.group == m.group[batch_id]) & ~m.is_fault & (m.index != batch_id)]
+    return int(min(c.index, key=lambda b: (abs(c.t_end[b] - m.t_end[batch_id]), b)))
+
+
+def compare(ids, vars=None):
+    """Series of several batches side by side; one id gets reference_batch() added. vars: column names or 'R'
+    (default: the mockup's five series)."""
+    s = _state()
+    vars = list(vars or SERIES.values())
+    unknown = set(vars) - set(s["ts"].columns) - {"R"}
+    if unknown:
+        raise ValueError(f"unknown variable: {sorted(unknown)}")
+    ids = [*ids, reference_batch(ids[0])] if len(ids) == 1 else list(ids)
+    out = []
+    for b in ids:
+        ts, rk = _batch(b)
+        vals = {v: _lst(rk.R if v == "R" else ts[v]) for v in vars}
+        out.append({**{k: v for k, v in summary(b).items() if k != "segments"}, "group": s["table"].group[b],
+                    "t": ts.t.tolist(), "values": vals})
+    meta = {v: ({"label": "Risk score R(t)", "unit": "0-100", "kind": "online"} if v == "R" else _meta(v)) for v in vars}
+    return {"vars": meta, "batches": out,
+            "reference_rule": "One batch given: the closest-length normal batch of the same control group is added."}

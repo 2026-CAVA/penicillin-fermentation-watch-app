@@ -289,3 +289,16 @@ def test_cross_check_saved():
     m = service.model_info()["cross_check"]
     assert set(m["overlap"]) == {"top3", "top5"} and all(0 <= v <= 1 for v in m["overlap"].values())
     assert [t["shap_rank"] for t in m["top"]] == [1, 2, 3, 4, 5] and all(t["label"] for t in m["top"])
+
+
+def test_compare(s):
+    from fastapi.testclient import TestClient
+    from main.api import app
+    c, t = TestClient(app), s["table"]
+    r = c.get("/compare?ids=92&vars=DO,R").json()
+    a, b = r["batches"]
+    assert a["id"] == 92 and t.group[b["id"]] == t.group[92] and not t.is_fault[b["id"]]
+    assert set(a["values"]) == {"DO", "R"} and len(a["values"]["DO"]) == len(a["t"])
+    assert len(c.get("/compare?ids=6,92,62").json()["batches"]) == 3
+    assert c.get("/compare?ids=6&vars=nope").status_code == 422 and c.get("/compare?ids=x").status_code == 422
+    assert c.get("/compare?ids=999").status_code == 404

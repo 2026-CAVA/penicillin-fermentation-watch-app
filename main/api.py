@@ -5,6 +5,7 @@
     GET  /batches/{id}/shap?t=&k=  yield SHAP top k (default 5, k=0 for all; t is accepted but not used yet)
     POST /simulate                 {"batch_id": 92, "changes": {"Fpaa_tot": 0.05}} -> run_whatif
     GET  /batches/{id}/events?all= excursions per variable (>= 1 h) during alarms; all=true for every one
+    GET  /compare?ids=6,92&vars=DO,pH   batches side by side (one id: a reference batch is added)
     GET  /model                    model, target, validation metrics, alarm rule, demo batches
 """
 from fastapi import FastAPI, HTTPException
@@ -43,6 +44,22 @@ def shap(batch_id: int, t: float | None = None, k: int = 5):
 def events(batch_id: int, all: bool = False):
     _known(batch_id)
     return service.events(batch_id, all)
+
+
+@app.get("/compare")
+def compare(ids: str, vars: str | None = None):
+    try:
+        bids = [int(b) for b in ids.split(",") if b]
+    except ValueError:
+        raise HTTPException(422, "ids: comma-separated batch numbers")
+    if not bids:
+        raise HTTPException(422, "ids: at least one batch")
+    for b in bids:
+        _known(b)
+    try:
+        return service.compare(bids, vars.split(",") if vars else None)
+    except ValueError as e:
+        raise HTTPException(422, str(e))
 
 
 @app.get("/model")
