@@ -96,6 +96,9 @@ features:                 # computed on 0 <= t <= t_cut
   last: [OUR, CER, V, Wt]
   total: [Fs, Foil, Fpaa, Fw, Fremoved, Fa, Fb, Fc, Fh]   # sum x dt
   offline_last: [P_off, X_off, Visc_off, PAA_off, NH3_off]
+  slope: [OUR, CER, DO, CO2outgas]   # (last - first) / hours over t_cut - slope_h < t <= t_cut
+  slope_h: 24
+  argmin_t: [DO]                     # hour of the minimum
 
 # Manipulated inputs only, one feature per variable. Fs, Foil, Fw, Fg, pressure follow one recipe over
 # 0..t_cut (same value in every train batch), so they cannot be sliders; the service also drops any

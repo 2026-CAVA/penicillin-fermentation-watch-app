@@ -131,7 +131,9 @@ def load_split():
 def build_batch_table(ts_rt, risk_ts, meta, t_cut, spec):
     """One row per batch from 0 <= t <= t_cut. ts_rt: real-time view (offline delayed + held).
     risk_ts already uses the OOF band for train batches, so band features are out-of-fold there."""
-    g = ts_rt[ts_rt.t <= t_cut].groupby("batch")
+    early = ts_rt[ts_rt.t <= t_cut]
+    g = early.groupby("batch")
+    w = early[early.t > t_cut - spec["slope_h"]].groupby("batch")  # trend over the last slope_h hours
     r = risk_ts[risk_ts.t <= t_cut]
     rg = r.groupby("batch")
     X = pd.concat([
@@ -140,6 +142,9 @@ def build_batch_table(ts_rt, risk_ts, meta, t_cut, spec):
         g[spec["last"]].last().add_suffix("_last"),
         (g[spec["total"]].sum() * DT).add_suffix("_tot"),
         g[spec["offline_last"]].last().add_suffix("_last"),  # last available (non-null) value
+        (w[spec["slope"]].last() - w[spec["slope"]].first()).div(w.t.last() - w.t.first(), axis=0).add_suffix("_slope"),
+        pd.DataFrame({f"{v}_min_t": early.t[g[v].idxmin()].to_numpy() for v in spec["argmin_t"]},
+                     index=g.size().index),  # hour of the first minimum
         pd.DataFrame({"R_mean": rg.R.mean(), "R_max": rg.R.max(),
                       "n_critical": (r.grade == "CRITICAL").groupby(r.batch).sum(),
                       "n_band": (r.band_n > 0).groupby(r.batch).sum()}),
