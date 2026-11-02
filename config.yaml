@@ -127,6 +127,11 @@ xgb:
   cv_seeds: [0, 1, 2]
   min_gain: 0.02          # search must beat the fixed params by >= 2% CV RMSE
 
+cv:                       # python -m main cv: the whole pipeline rebuilt on (n_splits - 1)/n_splits of the
+  n_splits: 5             # normal batches, scored on the rest and on every fault batch; repeated with new splits
+  repeats: 5
+  forecast_repeats: 1     # the P(t + h) model is slow to fit (6 fits per part): repeats that include it
+
 optimize:                 # slider search (whatif.optimize); also limited to the train range
   max_change: 0.2         # +-20% of this batch's own value (user choice; median gain 57 kg on val,
                           # all 5 fold models agree in 12/15 val batches)

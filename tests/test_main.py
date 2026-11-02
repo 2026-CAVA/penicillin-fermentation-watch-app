@@ -426,3 +426,16 @@ def test_optimize(s):
     assert r["y_pred_best"] - r["y_pred_current"] == pytest.approx(r["gain_kg"], abs=0.01)  # float32 predictions
     assert r["note"].startswith("Reference only") and 0 <= r["models_agree"] <= r["n_models"] == 5
     assert TestClient(app).post(f"/batches/{bid}/optimize", json={"max_change": 2}).status_code == 422
+
+
+def test_cv_parts(s):
+    """Each repeat scores every normal batch exactly once, never with itself in training, groups balanced."""
+    from main.cv import _parts
+    meta = batch_meta(s["ts"])
+    normal = meta.index[~meta.is_fault].to_numpy()
+    parts = _parts(normal, meta.group[normal], 5, 0)
+    scored = [b for _, ev in parts for b in ev]
+    assert sorted(scored) == sorted(normal)
+    for train, ev in parts:
+        assert not set(train) & set(ev) and len(train) + len(ev) == len(normal)
+        assert set(meta.group[ev].value_counts()) == {6}  # 30 per group / 5 parts

@@ -62,6 +62,7 @@ cd back
 | `explain` | SHAP 중요도, 결정트리 규칙, 더미변수 검증, SHAP·Permutation 교차 검증 |
 | `check` | 데이터 점검 출력 (요청할 때만) |
 | `test` | 시험 세트 최종 평가 (**아래 규칙 참고**) |
+| `cv` | 정상 90배치 반복 교차검증: 파이프라인 전체를 4/5로 다시 만들어 나머지 1/5과 고장 배치로 평가, 5회 반복 (약 3분, 결과 `artifacts/cv.json`) |
 | `serve` | HTTP API (`http://127.0.0.1:8000`, 문서는 `/docs`) |
 
 ```powershell

@@ -1,7 +1,8 @@
-"""Pipeline CLI: python -m main {prepare,check,warning,quality,cutoffs,forecast,explain,test,serve,all} ...
+"""Pipeline CLI: python -m main {prepare,check,warning,quality,cutoffs,forecast,explain,test,cv,serve,all} ...
 
 all = prepare warning quality cutoffs forecast explain. `test` (one-time test-set evaluation) and `check` run only on request.
 serve = HTTP API (main.api) on http://127.0.0.1:8000, reads the files the steps wrote.
+cv = repeated cross-validation of the whole pipeline over every normal batch (main.cv, several minutes).
 Each step reads the previous step's files in data/cache/ and artifacts/ and prints its results.
 """
 import argparse
@@ -12,6 +13,7 @@ import numpy as np
 import pandas as pd
 
 from main import forecast as fc
+from main.cv import run_cv
 from main.data import (ART, DATA, DT, assemble, batch_meta, batch_yield_kg, cfg, feature_cols, load_raw,
                        load_split, load_ts, make_split, names, offline_available, raw_path, read_json, write_json)
 from main.model import (baselines, bootstrap_ci, cross_check, dummy_check, export_rules, fit_rule_tree, global_importance,
@@ -404,7 +406,7 @@ def run_serve():
 
 STEPS = {"prepare": run_prepare, "check": run_check, "warning": run_warning, "quality": run_quality,
          "cutoffs": run_cutoffs, "forecast": run_forecast, "explain": run_explain, "test": run_test,
-         "serve": run_serve}
+         "cv": run_cv, "serve": run_serve}
 ALL = ["prepare", "warning", "quality", "cutoffs", "forecast", "explain"]
 
 if __name__ == "__main__":
