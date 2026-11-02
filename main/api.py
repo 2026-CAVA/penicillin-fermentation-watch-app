@@ -4,6 +4,7 @@
     GET  /batches/{id}             summary + per-time-point series
     GET  /batches/{id}/shap?t=&k=  yield SHAP top k (default 5, k=0 for all; t is accepted but not used yet)
     POST /simulate                 {"batch_id": 92, "changes": {"Fpaa_tot": 0.05}} -> run_whatif
+    GET  /batches/{id}/events?all= excursions per variable (>= 1 h) during alarms; all=true for every one
     GET  /model                    model, target, validation metrics, alarm rule, demo batches
 """
 from fastapi import FastAPI, HTTPException
@@ -36,6 +37,12 @@ def batch(batch_id: int):
 def shap(batch_id: int, t: float | None = None, k: int = 5):
     _known(batch_id)
     return service.shap_top(batch_id, k or None)
+
+
+@app.get("/batches/{batch_id}/events")
+def events(batch_id: int, all: bool = False):
+    _known(batch_id)
+    return service.events(batch_id, all)
 
 
 @app.get("/model")

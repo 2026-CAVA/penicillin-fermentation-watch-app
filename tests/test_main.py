@@ -267,3 +267,19 @@ def test_shap_all(s):
     assert d["shapBase"] + sum(x["value"] for x in allv) == pytest.approx(pred, rel=1e-4)  # waterfall adds up
     v = service.batch_view(bid)
     assert [x["feature"] for x in v["shap_all"]] == [x["feature"] for x in allv]
+
+
+def test_runs_and_events(s):
+    from main.warning import runs
+    assert runs([0, 1, 1, 1, -1, -1, 0, 1], 2) == [(1, 4, 1), (4, 6, -1)]
+    st = service._state()
+    n = st["th"]["persist"]
+    for bid in (s["split"]["val"][0], 92):
+        ev_all, ev = service.events(bid, all=True), service.events(bid)
+        assert all(e["duration_h"] >= n * 0.2 - 1e-9 and e["start"] < e["end"] for e in ev_all)
+        assert ev == [e for e in ev_all if e["grade"] != "STABLE"]
+        ex = service.explanation(bid)
+        rk = st["risk"][st["risk"].batch == bid]
+        assert (ex["first_alarm_h"] is None) == (rk.grade == "STABLE").all()
+        if ex["first_alarm_h"] is not None:
+            assert ex["first_alarm_h"] == rk.t[rk.grade != "STABLE"].iloc[0] and ex["causes"]

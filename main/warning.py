@@ -105,6 +105,23 @@ def band_alarm(n_flagged, batch, n_vars, consec):
     return sustained(n_flagged >= n_vars, batch, consec).astype(bool)
 
 
+def runs(sign, min_len):
+    """[(start, end, sign)]: positions (end exclusive) where a nonzero sign holds for >= min_len points."""
+    s = np.asarray(sign)
+    edges = np.flatnonzero(np.diff(s)) + 1
+    return [(a, b, int(s[a])) for a, b in zip(np.r_[0, edges], np.r_[edges, len(s)]) if s[a] != 0 and b - a >= min_len]
+
+
+def range_sign(ts, ranges):
+    """Per range variable: +1 above hi, -1 below lo, 0 inside or not yet available."""
+    out = {}
+    for v, r in ranges.items():
+        x = ts[v].to_numpy(float)
+        out[v] = np.where(x > (np.inf if r["hi"] is None else r["hi"]), 1,
+                          np.where(x < (-np.inf if r["lo"] is None else r["lo"]), -1, 0))
+    return pd.DataFrame(out, index=ts.index)
+
+
 def combine(grade_r, alarm):
     """Signal = R(t) grade, raised to at least WARNING while the band alarm is on."""
     return grade_r.where(~(alarm & (grade_r == "STABLE")), "WARNING")

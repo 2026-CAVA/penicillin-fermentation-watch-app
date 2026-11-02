@@ -5,6 +5,7 @@
     run_whatif(batch_id, changes) -> dict     changes = {"Fpaa_tot": 0.05, ...}  (relative, +5%)
     summary(batch_id), detail(batch_id), shap_top(batch_id) -> FermentIQ mockup shapes (served by main.api)
     model_info() -> dict                      model, target, val metrics, alarm rule, demo batches
+    events(batch_id), explanation(batch_id)   excursion list, first-alarm sentence
 """
 from functools import cache
 
@@ -13,7 +14,7 @@ import pandas as pd
 
 from main.data import ART, DATA, DT, cfg, col_meta, feature_label, load_split, load_ts, offline_available, read_json
 from main.model import load_xgb, shap_values, top_k_drivers
-from main.warning import GRADES, band_at, deviation, load_bands, risk_contrib
+from main.warning import GRADES, band_at, deviation, load_bands, range_sign, risk_contrib, runs
 from main.whatif import response_curve, rule_whatif, rule_whatif_by_var, whatif_predict
 
 TAGS = {"train": "Train batch - predicted by the model trained without this batch",
@@ -106,7 +107,8 @@ def batch_view(batch_id):
         "y_pred_kg": float(model.predict(xf)[0]), "y_true_kg": float(row.y),
         "t": ts.t.tolist(), "series": series,
         "risk": {"R": _lst(rk.R), "grade": rk.grade.tolist(), "band_alarm": rk.band_alarm.astype(bool).tolist(),
-                 "cuts": cuts, "alarm_top3": causes},
+                 "reason": alarm_reason(rk), "cuts": cuts, "alarm_top3": causes},
+        "events": events(batch_id), "explanation": explanation(batch_id),
         "shap_top3": _drivers(sh, x), "shap_base": float(sh["_base"]),
         "shap_all": _drivers(sh, x, k=len(x)),  # every feature, largest |shap| first; base + sum = y_pred_kg
         "rule": {**next(r for r in s["rules"]["rules"] if r["leaf"] == leaf), "tree_r2": s["rules"]["r2"],
@@ -175,7 +177,8 @@ def detail(batch_id):
                          "predictedFinal": np.where(ts.t >= s["split"]["t_cut"], _y_pred(batch_id), np.nan)})
     rows = rows.astype(object).where(rows.notna(), None)
     meta = {k: {"column": c, **_meta(c)} for k, c in SERIES.items()}
-    return {**summary(batch_id), "intervalH": DT, "shapBase": _shap(batch_id)["_base"], "seriesMeta": meta,
+    return {**summary(batch_id), "intervalH": DT, "shapBase": _shap(batch_id)["_base"],
+            "explanation": explanation(batch_id)["text"], "seriesMeta": meta,
             "series": rows.to_dict("records")}
 
 
@@ -205,3 +208,78 @@ def model_info():
                       "band_rule": th["band_rule"], "val_false_alarms": th["val_far"]},
             "rule_tree": {"r2": r["r2"], "reference_only": r["reference_only"]},
             "sliders": list(s["bounds"]), "demo_batches": cfg()["demo_batches"]}
+
+
+# --- events and alarm explanation (P3) -------------------------------------------------------------
+
+def _batch(batch_id):
+    s = _state()
+    return (offline_available(s["ts"][s["ts"].batch == batch_id]).reset_index(drop=True),
+            s["risk"][s["risk"].batch == batch_id].reset_index(drop=True))
+
+
+@cache
+def events(batch_id, all=False):
+    """Excursions per variable that last >= the alarm persistence (1 h): outside the normal band (band
+    variables) or outside the safety range (R(t) variables). Sorted by start; end is exclusive.
+    all=False keeps only excursions that overlap an alarm (grade above STABLE): normal batches have many
+    short, harmless excursions (median 11 per val normal batch)."""
+    s = _state()
+    ts, rk = _batch(batch_id)
+    th, rank = s["th"], list(GRADES).index
+    t, n = ts.t.to_numpy(), th["persist"]
+    signs = [("band", v, rk[f"band_{v}"].to_numpy()) for v in s["bands"]["full"]["vars"].tolist()]
+    signs += [("safe_range", v, sg.to_numpy()) for v, sg in range_sign(ts, th["ranges"]).items()]
+    out = []
+    for source, v, sign in signs:
+        m = col_meta(v)
+        for a, b, d in runs(sign, n):
+            x = ts[v].iloc[a:b]
+            peak = float(x.max() if d > 0 else x.min())
+            where = "normal band" if source == "band" else "safety range"
+            grade = max(rk.grade.iloc[a:b], key=rank)
+            if not all and grade == "STABLE":
+                continue
+            out.append({"var": v, "label": m["label"], "unit": m["unit"], "source": source,
+                        "direction": "high" if d > 0 else "low", "start": round(float(t[a]), 4),
+                        "end": round(float(t[b - 1]) + DT, 4), "duration_h": round((b - a) * DT, 4), "peak": peak,
+                        "grade": grade,
+                        "message": f"{m['label']} {'above' if d > 0 else 'below'} the {where} for {(b - a) * DT:.1f} h "
+                                   f"({'max' if d > 0 else 'min'} {peak:.4g} {m['unit']})"})
+    return sorted(out, key=lambda e: (e["start"], e["var"]))
+
+
+def alarm_reason(rk):
+    """Per time point: 'risk_score' when R(t) sets the grade, 'band' when only the band rule raised it, else None."""
+    return np.where(rk.grade_r != "STABLE", "risk_score", np.where(rk.band_alarm, "band", None)).tolist()
+
+
+@cache
+def explanation(batch_id):
+    """One sentence on the first alarm (time, grade, why, main variables) and the worst grade."""
+    s = _state()
+    ts, rk = _batch(batch_id)
+    th = s["th"]
+    on = np.flatnonzero((rk.grade != "STABLE").to_numpy())
+    h = th["persist"] * DT
+    if not len(on):
+        return {"text": f"No alarm: the risk score never stayed at or above {th['cuts'][0]} for {h:g} h "
+                        f"and the band rule never fired.", "first_alarm_h": None, "reason": None, "causes": []}
+    i = on[0]
+    g, reason = rk.grade.iloc[i], alarm_reason(rk)[i]
+    if reason == "risk_score":
+        share = risk_contrib(deviation(ts.iloc[[i]], th["ranges"]), th["ranges"]).iloc[0]
+        causes = [v for v, p in share.sort_values(ascending=False).items() if p > 0][:3]
+        why = (f"risk score held at or above {th['cuts'][g == 'CRITICAL']} for {h:g} h; main contributors: "
+               + ", ".join(f"{col_meta(v)['label']} {share[v]:.0f}%" for v in causes))
+    else:
+        causes = [v.removeprefix("band_") for v in rk.filter(like="band_").columns
+                  if v != "band_n" and v != "band_alarm" and rk[v].iloc[i] != 0]
+        br = th["band_rule"]
+        why = (f"{br['n_vars']} or more variables outside the normal band for {br['consec'] * DT * 60:.0f} min: "
+               + ", ".join(col_meta(v)["label"] for v in causes))
+    text = f"First alarm at {rk.t.iloc[i]:g} h ({g}): {why}."
+    crit = rk.t[rk.grade == "CRITICAL"]
+    if len(crit) and g != "CRITICAL":
+        text += f" CRITICAL from {crit.iloc[0]:g} h, {len(crit) * DT:.1f} h in total."
+    return {"text": text, "first_alarm_h": float(rk.t.iloc[i]), "reason": reason, "causes": causes}
