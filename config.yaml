@@ -57,6 +57,8 @@ cutoff_frac: 0.5          # t_cut = frac x median train batch length, same absol
 cutoff_fracs: [0.2, 0.3, 0.4, 0.5, 0.6, 0.7]   # prediction trend: one model per cutoff (x median train length)
 cutoff_min_cv_r2: 0.0     # shown from the earliest cutoff whose repeated-CV r2 (mean - 2 SE), and every
                           # later cutoff's, is above this (beats the train mean beyond noise)
+pred_interval: 0.8        # y_pred +- the 80% quantile of train out-of-fold |error| (val coverage is reported);
+                          # the fold-model spread is also kept but covers far less (27-60% on val)
 
 # Safety ranges for R(t) = 100 * min(1, sum_i w_i d_i(t)).
 #   li2024: Li, Qiu & You (2024) Chem. Eng. Sci. 292, 119990, Table 1. DCO2 (<= 7.57 mg/L) is not in the data.

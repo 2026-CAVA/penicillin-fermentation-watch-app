@@ -219,7 +219,7 @@ def test_api_matches_mockup_contract(s):
     from fastapi.testclient import TestClient
     from main.api import app
     c, bid = TestClient(app), s["split"]["val"][0]
-    summary = {"id", "runStatus", "elapsedH", "plannedEndH", "state", "predictedFinal", "latestScore",
+    summary = {"id", "runStatus", "elapsedH", "plannedEndH", "state", "predictedFinal", "predictedRange", "latestScore",
                "finalMeasured", "firstAnomalyH", "anomalyDurationH", "segments", "scoreCuts"}
     rows = c.get("/batches").json()
     assert len(rows) == 100 and all(set(r) == summary for r in rows)
@@ -372,3 +372,12 @@ def test_pred_trend(s):
         reached = [p["y_pred"] for p in trend if p["t_cut"] <= row["t"] + 1e-9]
         assert row["predictedFinal"] == (reached[-1] if reached else None)
     assert d["predictedFinal"] == trend[-1]["y_pred"]
+
+
+def test_prediction_ranges(s):
+    cut = read_json(ART / "cutoffs.json")
+    assert all(0 <= r["val_coverage_interval"] <= 1 and 0 <= r["val_coverage_spread"] <= 1 for r in cut.values())
+    for p in service.pred_trend(s["split"]["val"][0]):
+        assert p["y_pred_lo"] < p["y_pred"] < p["y_pred_hi"] and p["spread_lo"] <= p["spread_hi"]
+        half = cut[f"{p['t_cut']:g}"]["interval_halfwidth"]
+        assert p["y_pred_hi"] - p["y_pred"] == pytest.approx(half, rel=1e-5)

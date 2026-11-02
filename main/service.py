@@ -184,10 +184,13 @@ def _batch(batch_id, t=None):
 
 
 def pred_trend(batch_id, t=None):
-    """[{t_cut, y_pred}]: the yield prediction of every provided cutoff model reached by t (OOF for train)."""
+    """Yield prediction of every provided cutoff model reached by t (OOF for train), with two ranges:
+    y_pred_lo/hi = +- the 80% quantile of train OOF |error| (covers ~80-90% on val; show this one) and
+    spread_lo/hi = min/max of the 5 fold models ("model spread": covers far less, not an error range)."""
     tr = _state()["trend"]
-    tr = tr[tr.index == batch_id]
-    return [{"t_cut": float(h), "y_pred": float(y)} for h, y in zip(tr.t_cut, tr.y_pred) if t is None or h <= t + 1e-9]
+    tr = tr[(tr.index == batch_id) & ((tr.t_cut <= t + 1e-9) if t is not None else True)]
+    cols = ["t_cut", "y_pred", "y_pred_lo", "y_pred_hi", "spread_lo", "spread_hi"]
+    return [{k: float(v) for k, v in zip(cols, r)} for r in tr[cols].itertuples(index=False)]
 
 
 def _status(batch_id, now):
@@ -198,6 +201,7 @@ def _status(batch_id, now):
     running = now < end - 1e-9
     trend = pred_trend(batch_id, now)
     return {"running": running, "end": None if running else end, "pred": trend[-1]["y_pred"] if trend else None,
+            "range": [trend[-1]["y_pred_lo"], trend[-1]["y_pred_hi"]] if trend else None,
             "measured": None if running else float(s["table"].y[batch_id])}
 
 
@@ -213,6 +217,7 @@ def summary(batch_id, t=None):
     return {"id": int(batch_id), "runStatus": "running" if st["running"] else "completed",
             "elapsedH": float(tt[-1]), "plannedEndH": st["end"],
             "state": STATE[max(rk.grade, key=list(GRADES).index)], "predictedFinal": st["pred"],
+            "predictedRange": st["range"],
             "latestScore": float(rk.R.iloc[-1]), "scoreCuts": s["th"]["cuts"], "finalMeasured": st["measured"],
             "firstAnomalyH": float(anomaly[0]) if len(anomaly) else None,
             "anomalyDurationH": round(len(anomaly) * DT, 4),

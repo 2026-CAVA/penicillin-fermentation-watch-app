@@ -220,24 +220,33 @@ def run_cutoffs():
         p = pd.DataFrame({f"fold{k}": m.predict(X) for k, m in folds.items()}, index=X.index)
         p["y_pred"] = final.predict(X)
         p.loc[tr, "y_pred"] = oof  # a train batch is predicted by the fold model that left it out
+        # two ranges: spread of the fold models, and +-q with q = a quantile of the train OOF |error|
+        p["spread_lo"], p["spread_hi"] = p.filter(like="fold").min(axis=1), p.filter(like="fold").max(axis=1)
+        q = float((y.loc[tr] - oof).abs().quantile(c["pred_interval"]))
+        p["y_pred_lo"], p["y_pred_hi"] = p.y_pred - q, p.y_pred + q
         preds.append(p.assign(t_cut=h))
         tables.append(X.assign(t_cut=h))
         v = metrics(y.loc[va], final.predict(X.loc[va]))
+        pv, yv = p.loc[va], y.loc[va]
         lower = cv.r2.mean() - 2 * cv.r2.std() / np.sqrt(len(cv))  # beats the mean beyond repeat noise
         rows[f"{h:g}"] = {"t_cut": h, "cv_rmse": float(cv.rmse.mean()), "cv_rmse_sd": float(cv.rmse.std()),
                           "cv_r2": float(cv.r2.mean()), "cv_r2_lower": float(lower), "val_rmse": v["rmse"],
-                          "val_r2": v["r2"], "provided": bool(lower > c["cutoff_min_cv_r2"])}
+                          "val_r2": v["r2"], "provided": bool(lower > c["cutoff_min_cv_r2"]),
+                          "interval_halfwidth": q, "val_coverage_interval": float(yv.between(pv.y_pred_lo, pv.y_pred_hi).mean()),
+                          "spread_width_median": float((pv.spread_hi - pv.spread_lo).median()),
+                          "val_coverage_spread": float(yv.between(pv.spread_lo, pv.spread_hi).mean())}
     later_ok = True  # provide from the earliest cutoff after which every cutoff passes
     for r in reversed(rows.values()):
         later_ok = r["provided"] = later_ok and r["provided"]
     pd.concat(tables).to_parquet(DATA / "cutoff_features.parquet")
     pd.concat(preds).to_parquet(DATA / "cutoff_preds.parquet")
     write_json(ART / "cutoffs.json", rows)
-    print(f"{'cutoff':>7}{'cv rmse':>10}{'sd':>6}{'cv r2':>8}{'-2se':>8}{'val rmse':>10}{'val r2':>8}  provided")
+    print(f"{'cutoff':>7}{'cv rmse':>10}{'sd':>6}{'cv r2':>8}{'-2se':>8}{'val rmse':>10}{'val r2':>8}"
+          f"{'+-range':>9}{'cover':>7}{'spread':>8}{'cover':>7}  provided")
     for k, r in rows.items():
         print(f"{k + ' h':>7}{r['cv_rmse']:10.0f}{r['cv_rmse_sd']:6.0f}{r['cv_r2']:8.3f}{r['cv_r2_lower']:8.3f}"
-              f"{r['val_rmse']:10.0f}"
-              f"{r['val_r2']:8.3f}  {'yes' if r['provided'] else 'no'}")
+              f"{r['val_rmse']:10.0f}{r['val_r2']:8.3f}{r['interval_halfwidth']:9.0f}{r['val_coverage_interval']:7.0%}"
+              f"{r['spread_width_median']:8.0f}{r['val_coverage_spread']:7.0%}  {'yes' if r['provided'] else 'no'}")
 
 
 def run_explain():
