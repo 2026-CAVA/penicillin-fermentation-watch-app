@@ -1,6 +1,6 @@
-"""Pipeline CLI: python -m main {prepare,check,warning,quality,explain,test,serve,all} ...
+"""Pipeline CLI: python -m main {prepare,check,warning,quality,cutoffs,explain,test,serve,all} ...
 
-all = prepare warning quality explain. `test` (one-time test-set evaluation) and `check` run only on request.
+all = prepare warning quality cutoffs explain. `test` (one-time test-set evaluation) and `check` run only on request.
 serve = HTTP API (main.api) on http://127.0.0.1:8000, reads the files the steps wrote.
 Each step reads the previous step's files in data/cache/ and artifacts/ and prints its results.
 """
@@ -14,7 +14,8 @@ import pandas as pd
 from main.data import (ART, DATA, DT, assemble, batch_meta, batch_yield_kg, cfg, feature_cols, load_raw,
                        load_split, load_ts, make_split, names, offline_available, raw_path, read_json, write_json)
 from main.model import (baselines, bootstrap_ci, cross_check, dummy_check, export_rules, fit_rule_tree, global_importance,
-                        load_xgb, make_xgb, metrics, oof_predict, search_params, select_rule_tree, shap_values)
+                        load_xgb, make_xgb, metrics, oof_predict, repeated_cv, search_params, select_rule_tree,
+                        shap_values)
 from main.warning import (band_alarm, band_flags, combine, deviation, fit_band, lowest_cut, resolve_ranges,
                           risk_grade, risk_score, save_bands, sustained, warning_metrics)
 
@@ -157,7 +158,7 @@ def signals(risk):
 
 
 def run_quality():
-    """Batch table, XGBoost (search on train CV) + fold models, baselines on val, cutoff sensitivity."""
+    """Batch table, XGBoost (search on train CV) + fold models, baselines on val."""
     c = cfg()
     ts, split = load_ts(), load_split()
     risk = pd.read_parquet(DATA / "risk_ts.parquet")
@@ -179,22 +180,12 @@ def run_quality():
         val[f"baseline_{k}"] = metrics(y.loc[va], m.predict(X.loc[va]))
     passed = all(val["xgboost"]["rmse"] < m["rmse"] for k, m in val.items() if k != "xgboost")
 
-    med = batch_meta(ts).t_end[tr].median()
-    curve = {}
-    for frac in sorted({*c["sensitivity_fracs"], c["cutoff_frac"]}):
-        t = assemble(ts, risk, split, round(frac * med / DT) * DT)
-        Xt = t[feats]
-        oof, _ = oof_predict(Xt.loc[tr], y.loc[tr], params, t.fold.loc[tr], c["seed"])
-        val_pred = make_xgb(params, c["seed"]).fit(Xt.loc[tr], y.loc[tr]).predict(Xt.loc[va])
-        curve[f"{frac * med:.0f} h"] = {"train_oof_r2": metrics(y.loc[tr], oof)["r2"],
-                                                     "val_r2": metrics(y.loc[va], val_pred)["r2"]}
-
     pv = pd.DataFrame({"group": table.group.loc[va], "y": y.loc[va], "y_pred": model.predict(X.loc[va])})
     by_group = {g: metrics(d.y, d.y_pred)["r2"] for g, d in pv.groupby("group")}
     write_json(ART / "quality.json", {
         "features": feats, "params": params, "t_cut": split["t_cut"],
         "cv_rmse": {"fixed": fixed_rmse, "chosen": cv},
-        "val": val, "val_pass": passed, "val_r2_by_group": by_group, "val_r2_by_cutoff": curve,
+        "val": val, "val_pass": passed, "val_r2_by_group": by_group,
         "val_ci95": bootstrap_ci(y.loc[va], model.predict(X.loc[va]), seed=c["seed"])})  # 15 batches: wide
 
     print(f"val ({len(va)} batches)  " + "".join(f"{h:>7}" for h in ("rmse", "mae", "mape", "r2")))
@@ -202,7 +193,47 @@ def run_quality():
         print(f"{name:<19}{m['rmse']:7.0f}{m['mae']:7.0f}{m['mape']:7.1f}{m['r2']:7.3f}")
     print(f"pass: {'yes' if passed else 'no'}")
     print("val r2 by group: " + ", ".join(f"{g} {r:.2f}" for g, r in by_group.items()))
-    print("val r2 by cutoff: " + ", ".join(f"{k} {v['val_r2']:.2f}" for k, v in curve.items()))
+
+
+def run_cutoffs():
+    """Yield models at several cutoffs (same features and params as `quality`), for the prediction trend.
+    Saves per batch and cutoff the routed prediction (OOF for train) and every fold model's prediction."""
+    c, q = cfg(), read_json(ART / "quality.json")
+    ts, split = load_ts(), load_split()
+    risk = pd.read_parquet(DATA / "risk_ts.parquet")
+    tr, va, feats, params = split["train"], split["val"], q["features"], q["params"]
+    t_end = batch_meta(ts).t_end
+    rows, tables, preds = {}, [], []
+    for frac in c["cutoff_fracs"]:
+        h = round(frac * t_end[tr].median() / DT) * DT
+        if h >= t_end.min():
+            raise ValueError(f"cutoff {h} h is not before the shortest batch ({t_end.min()} h)")
+        table = assemble(ts, risk, split, h)
+        X, y = table[feats], table.y
+        cv = repeated_cv(X.loc[tr], y.loc[tr], params, c["seed"])
+        final = make_xgb(params, c["seed"]).fit(X.loc[tr], y.loc[tr])
+        oof, folds = oof_predict(X.loc[tr], y.loc[tr], params, table.fold.loc[tr], c["seed"])
+        p = pd.DataFrame({f"fold{k}": m.predict(X) for k, m in folds.items()}, index=X.index)
+        p["y_pred"] = final.predict(X)
+        p.loc[tr, "y_pred"] = oof  # a train batch is predicted by the fold model that left it out
+        preds.append(p.assign(t_cut=h))
+        tables.append(X.assign(t_cut=h))
+        v = metrics(y.loc[va], final.predict(X.loc[va]))
+        lower = cv.r2.mean() - 2 * cv.r2.std() / np.sqrt(len(cv))  # beats the mean beyond repeat noise
+        rows[f"{h:g}"] = {"t_cut": h, "cv_rmse": float(cv.rmse.mean()), "cv_rmse_sd": float(cv.rmse.std()),
+                          "cv_r2": float(cv.r2.mean()), "cv_r2_lower": float(lower), "val_rmse": v["rmse"],
+                          "val_r2": v["r2"], "provided": bool(lower > c["cutoff_min_cv_r2"])}
+    later_ok = True  # provide from the earliest cutoff after which every cutoff passes
+    for r in reversed(rows.values()):
+        later_ok = r["provided"] = later_ok and r["provided"]
+    pd.concat(tables).to_parquet(DATA / "cutoff_features.parquet")
+    pd.concat(preds).to_parquet(DATA / "cutoff_preds.parquet")
+    write_json(ART / "cutoffs.json", rows)
+    print(f"{'cutoff':>7}{'cv rmse':>10}{'sd':>6}{'cv r2':>8}{'-2se':>8}{'val rmse':>10}{'val r2':>8}  provided")
+    for k, r in rows.items():
+        print(f"{k + ' h':>7}{r['cv_rmse']:10.0f}{r['cv_rmse_sd']:6.0f}{r['cv_r2']:8.3f}{r['cv_r2_lower']:8.3f}"
+              f"{r['val_rmse']:10.0f}"
+              f"{r['val_r2']:8.3f}  {'yes' if r['provided'] else 'no'}")
 
 
 def run_explain():
@@ -290,8 +321,8 @@ def run_serve():
 
 
 STEPS = {"prepare": run_prepare, "check": run_check, "warning": run_warning, "quality": run_quality,
-         "explain": run_explain, "test": run_test, "serve": run_serve}
-ALL = ["prepare", "warning", "quality", "explain"]
+         "cutoffs": run_cutoffs, "explain": run_explain, "test": run_test, "serve": run_serve}
+ALL = ["prepare", "warning", "quality", "cutoffs", "explain"]
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(prog="python -m main", description=__doc__.splitlines()[0])

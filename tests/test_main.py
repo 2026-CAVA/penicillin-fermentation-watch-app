@@ -342,3 +342,33 @@ def test_replay_api():
     assert c.get("/batches/92?t=0.1").status_code == 422 and c.get("/batches/92/contrib").status_code == 422
     r = c.get("/batches/92/contrib?t=150").json()
     assert r["t"] == 150 and abs(sum(x["share_pct"] for x in r["contrib"]) - 100) < 1e-6
+
+
+@pytest.mark.parametrize("h", [69.0, 161.0])
+def test_cutoff_features_no_future(s, h):
+    """Stored cutoff features equal features rebuilt after every value later than the cutoff is scrambled."""
+    stored = pd.read_parquet(DATA / "cutoff_features.parquet")
+    stored = stored[stored.t_cut == h].drop(columns="t_cut").loc[[1, 2]]
+    ts = s["ts"][s["ts"].batch.isin([1, 2])].copy()
+    risk = s["risk"][s["risk"].batch.isin([1, 2])].copy()
+    late = ts.t > h
+    for c in names("input"):
+        ts.loc[late, c] = ts.loc[late, c] * 10 + 7
+    risk.loc[risk.t > h, "R"] = 99
+    again = build_batch_table(offline_available(ts), risk, batch_meta(ts), h, cfg()["features"])
+    pd.testing.assert_frame_equal(stored, again[stored.columns], check_dtype=False)
+
+
+def test_pred_trend(s):
+    cut = read_json(ART / "cutoffs.json")
+    shown = [r["provided"] for r in cut.values()]
+    assert shown == sorted(shown)  # once provided, every later cutoff is provided too
+    bid, t_cut = s["split"]["val"][0], s["split"]["t_cut"]
+    trend = service.pred_trend(bid)
+    first = {p["t_cut"]: p["y_pred"] for p in trend}
+    assert first[t_cut] == pytest.approx(service.batch_view(bid)["y_pred_kg"], rel=1e-5)  # same model as quality
+    d = service.detail(bid)
+    for row in d["series"]:
+        reached = [p["y_pred"] for p in trend if p["t_cut"] <= row["t"] + 1e-9]
+        assert row["predictedFinal"] == (reached[-1] if reached else None)
+    assert d["predictedFinal"] == trend[-1]["y_pred"]

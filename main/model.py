@@ -49,6 +49,18 @@ def cv_rmse(X, y, params, seeds, n_splits=5):
     return float(np.mean(s))
 
 
+def repeated_cv(X, y, params, seed, n_rep=10, n_splits=5):
+    """OOF metrics of shuffled k-fold, repeated n_rep times (one row per repeat). With 60 train batches a
+    single split is noisy; compare settings on the mean and spread of these rows."""
+    out = []
+    for r in range(n_rep):
+        oof = pd.Series(np.nan, index=X.index)
+        for a, b in KFold(n_splits, shuffle=True, random_state=seed + r).split(X):
+            oof.iloc[b] = make_xgb(params, seed).fit(X.iloc[a], y.iloc[a]).predict(X.iloc[b])
+        out.append(metrics(y, oof))
+    return pd.DataFrame(out)
+
+
 def search_params(X, y, cfg, seed):
     """Random search over cfg['space']; keep the fixed params unless search beats them by min_gain.
     Returns (params, fixed_cv_rmse, chosen_cv_rmse)."""

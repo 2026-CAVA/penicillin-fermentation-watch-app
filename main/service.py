@@ -5,6 +5,7 @@
     run_whatif(batch_id, changes) -> dict     changes = {"Fpaa_tot": 0.05, ...}  (relative, +5%)
     summary(batch_id, t), detail(batch_id, t), shap_top(batch_id, k, t) -> FermentIQ mockup shapes (main.api)
     contrib(batch_id, t) -> dict              R(t) contribution per variable at time t
+    pred_trend(batch_id, t) -> list           yield prediction of each cutoff model reached by t
     model_info() -> dict                      model, target, val metrics, alarm rule, demo batches
     events(batch_id), explanation(batch_id)   excursion list, first-alarm sentence
     compare(ids, vars), reference_batch(id)  series of several batches side by side
@@ -33,7 +34,14 @@ def _state():
             "th": read_json(ART / "thresholds.json"), "split": split, "bands": load_bands(ART / "bands.npz"),
             "final": load_xgb(ART / "xgb.json"),
             "folds": {k: load_xgb(ART / f"xgb_fold{k}.json") for k in range(cfg()["split"]["n_folds"])},
-            "rules": read_json(ART / "rules.json"), "bounds": slider_bounds(X.loc[split["train"]], cfg()["sliders"])}
+            "rules": read_json(ART / "rules.json"), "bounds": slider_bounds(X.loc[split["train"]], cfg()["sliders"]),
+            "trend": _provided(pd.read_parquet(DATA / "cutoff_preds.parquet"), read_json(ART / "cutoffs.json"))}
+
+
+def _provided(preds, cutoffs):
+    """Cutoff predictions of the cutoffs that beat the mean in repeated CV, sorted by t_cut."""
+    ok = [c["t_cut"] for c in cutoffs.values() if c["provided"]]
+    return preds[preds.t_cut.isin(ok)].sort_values("t_cut")
 
 
 def slider_bounds(X_train, sliders):
@@ -84,7 +92,7 @@ def batch_view(batch_id, t=None):
     ranges, cuts, persist = s["th"]["ranges"], s["th"]["cuts"], s["th"]["persist"]
     ts, rk = _batch(batch_id, t)
     st = _status(batch_id, float(ts.t.iloc[-1]))
-    ready = st["pred"] is not None
+    ready = ts.t.iloc[-1] >= s["split"]["t_cut"]  # the explained model (SHAP, rule, sliders) predicts at t_cut
     x = s["X"].loc[batch_id]
     xf = x.to_frame().T.astype(float)
     sh = shap_values(model, xf).iloc[0]
@@ -111,6 +119,7 @@ def batch_view(batch_id, t=None):
         "running": st["running"], "t_now": float(ts.t.iloc[-1]),
         "light_final": rk.grade.iloc[-1], "light_worst": max(rk.grade, key=list(GRADES).index),
         "y_pred_kg": float(model.predict(xf)[0]) if ready else None, "y_true_kg": st["measured"],
+        "pred_trend": pred_trend(batch_id, t), "pred_latest_kg": st["pred"],
         "t": ts.t.tolist(), "series": series,
         "risk": {"R": _lst(rk.R), "grade": rk.grade.tolist(), "band_alarm": rk.band_alarm.astype(bool).tolist(),
                  "reason": alarm_reason(rk), "cuts": cuts, "alarm_top3": causes},
@@ -174,14 +183,21 @@ def _batch(batch_id, t=None):
     return ts.iloc[:len(rk)], rk
 
 
+def pred_trend(batch_id, t=None):
+    """[{t_cut, y_pred}]: the yield prediction of every provided cutoff model reached by t (OOF for train)."""
+    tr = _state()["trend"]
+    tr = tr[tr.index == batch_id]
+    return [{"t_cut": float(h), "y_pred": float(y)} for h, y in zip(tr.t_cut, tr.y_pred) if t is None or h <= t + 1e-9]
+
+
 def _status(batch_id, now):
-    """running while now < the batch end; the end, the measured yield and (before t_cut) the prediction are
-    not known yet."""
+    """running while now < the batch end; the end and the measured yield are not known yet. pred = the latest
+    cutoff prediction reached by now (None before the first provided cutoff)."""
     s = _state()
     end = float(s["risk"].t[s["risk"].batch == batch_id].max())
     running = now < end - 1e-9
-    return {"running": running, "end": None if running else end,
-            "pred": _y_pred(batch_id) if now >= s["split"]["t_cut"] else None,
+    trend = pred_trend(batch_id, now)
+    return {"running": running, "end": None if running else end, "pred": trend[-1]["y_pred"] if trend else None,
             "measured": None if running else float(s["table"].y[batch_id])}
 
 
@@ -206,17 +222,19 @@ def summary(batch_id, t=None):
 
 def detail(batch_id, t=None):
     """summary + one row per time point up to t. penicillin = offline P as known in real time (4 h delay,
-    held); predictedFinal exists from t_cut on (the model predicts once, at t_cut)."""
+    held); predictedFinal = the latest cutoff model reached at that time point (null before the first)."""
     s = _state()
     ts, rk = _batch(batch_id, t)
-    pred = _y_pred(batch_id) if ts.t.iloc[-1] >= s["split"]["t_cut"] else np.nan
+    trend = pred_trend(batch_id, t)
+    hs, ys = np.array([p["t_cut"] for p in trend]), np.array([p["y_pred"] for p in trend] + [np.nan])
+    i = np.searchsorted(hs, ts.t.to_numpy() + 1e-9, side="right") - 1  # -1 before the first cutoff -> nan
+    ready = ts.t.iloc[-1] >= s["split"]["t_cut"]  # SHAP explains the t_cut model
     rows = pd.DataFrame({"t": ts.t, **{k: ts[c] for k, c in SERIES.items()}, "score": rk.R,
-                         "state": rk.grade.map(STATE),
-                         "predictedFinal": np.where(ts.t >= s["split"]["t_cut"], pred, np.nan)})
+                         "state": rk.grade.map(STATE), "predictedFinal": ys[i]})
     rows = rows.astype(object).where(rows.notna(), None)
     meta = {k: {"column": c, **_meta(c)} for k, c in SERIES.items()}
     return {**summary(batch_id, t), "intervalH": DT,
-            "shapBase": _shap(batch_id)["_base"] if np.isfinite(pred) else None,
+            "shapBase": _shap(batch_id)["_base"] if ready else None,
             "explanation": explanation(batch_id, t)["text"], "seriesMeta": meta,
             "series": rows.to_dict("records")}
 
@@ -256,7 +274,7 @@ def model_info():
     return {"title": f"Plan A · XGBoost · val R² {v['r2']:.2f}", "plan": "Plan A", "model": "XGBoost",
             "target": target(), "n_features": len(q["features"]), "n_train": len(s["split"]["train"]),
             "n_val": len(s["split"]["val"]), "val": q["val"], "val_ci95": q["val_ci95"], "val_pass": q["val_pass"],
-            "val_r2_by_group": q["val_r2_by_group"], "val_r2_by_cutoff": q["val_r2_by_cutoff"],
+            "val_r2_by_group": q["val_r2_by_group"], "cutoffs": read_json(ART / "cutoffs.json"),
             "alarm": {"cuts": th["cuts"], "persist_points": th["persist"], "persist_h": th["persist"] * DT,
                       "band_rule": th["band_rule"], "val_false_alarms": th["val_far"]},
             "rule_tree": {"r2": r["r2"], "reference_only": r["reference_only"]},

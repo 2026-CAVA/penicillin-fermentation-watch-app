@@ -50,16 +50,18 @@ cd back
 .venv\Scripts\python -m main all
 ```
 
-`all`은 표의 앞 4단계(`prepare` → `warning` → `quality` → `explain`)를 차례로 실행합니다(약 45초). `check`와 `test`는 따로 실행합니다. 결과는 터미널에 출력되고, 다음 단계가 쓸 파일은 `data/cache/`와 `artifacts/`에 저장됩니다.
+`all`은 표의 앞 5단계(`prepare` → `warning` → `quality` → `cutoffs` → `explain`)를 차례로 실행합니다(약 1분). `check`와 `test`는 따로 실행합니다. 결과는 터미널에 출력되고, 다음 단계가 쓸 파일은 `data/cache/`와 `artifacts/`에 저장됩니다.
 
 | 단계 | 하는 일 |
 |---|---|
 | `prepare` | 원본 CSV 정리, 학습/검증/시험 분할, 컷오프 결정 | 
 | `warning` | 밴드, R(t), 경보 경계값 결정·고정 |
-| `quality` | 요약 표, XGBoost 학습(+fold 모델), 기준선 비교, 컷오프 민감도 |
-| `explain` | SHAP 중요도, 결정트리 규칙, 더미변수 검증 |
+| `quality` | 요약 표, XGBoost 학습(+fold 모델), 기준선 비교 |
+| `cutoffs` | 컷오프(46~161 h)마다 수율 모델 학습, 반복 CV로 제공 여부 결정 → 시점별 예측 추이 |
+| `explain` | SHAP 중요도, 결정트리 규칙, 더미변수 검증, SHAP·Permutation 교차 검증 |
 | `check` | 데이터 점검 출력 (요청할 때만) |
 | `test` | 시험 세트 최종 평가 (**아래 규칙 참고**) |
+| `serve` | HTTP API (`http://127.0.0.1:8000`, 문서는 `/docs`) |
 
 ```powershell
 .venv\Scripts\python -m main quality            # 한 단계만
@@ -67,7 +69,7 @@ cd back
 .venv\Scripts\python -m main --help
 ```
 
-`config.yaml`을 고쳤으면 그 설정을 쓰는 단계부터 다시 실행합니다. 예: 안전 범위를 바꿨으면 `warning quality explain`.
+`config.yaml`을 고쳤으면 그 설정을 쓰는 단계부터 다시 실행합니다. 예: 안전 범위를 바꿨으면 `warning quality cutoffs explain`.
 
 ### 정상 실행 확인용 값
 
