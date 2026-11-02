@@ -11,7 +11,7 @@ from main import service
 from main.data import (ART, DATA, META, batch_meta, build_batch_table, cfg, load_split, load_ts, names,
                        offline_available, read_json)
 from main.model import load_xgb, oof_predict
-from main.warning import band_flags, deviation, load_bands, resolve_ranges, risk_score, warning_metrics
+from main.warning import band_flags, deviation, load_bands, resolve_ranges, risk_score, sustained, warning_metrics
 from main.whatif import rule_whatif, rule_whatif_by_var, whatif_predict
 
 
@@ -75,6 +75,12 @@ def test_risk_single_var():
     assert risk_score(deviation(ts, ranges), ranges).tolist() == [0, 100, 50]  # one var a full tolerance out -> 100
 
 
+def test_sustained_ignores_short_spikes():
+    r = pd.Series([0, 90, 0, 50, 60, 70, 0, 80.0])
+    batch = pd.Series([1] * 6 + [2] * 2)
+    assert sustained(r, batch, 3).tolist() == [0, 0, 0, 0, 0, 50, 0, 0]  # never across batches
+
+
 def test_no_future_info(s):
     ts = s["ts"][s["ts"].batch.isin([1, 2])].copy()
     risk = s["risk"][s["risk"].batch.isin([1, 2])].copy()
@@ -113,7 +119,8 @@ def test_whatif_zero_change_and_bounds(s):
     r0 = whatif_predict(st["final"], x, {f: 0.0 for f in st["bounds"]}, st["bounds"])
     assert r0["delta"] == 0 and r0["y_pred_before"] == pytest.approx(service.batch_view(bid)["y_pred_kg"])
     for f, io in whatif_predict(st["final"], x, {f: 50.0 for f in st["bounds"]}, st["bounds"])["inputs"].items():
-        assert st["bounds"][f][0] <= io["after"] <= st["bounds"][f][1]
+        if "linked_to" not in io:  # linked features (V_last, Wt_last) follow the slider and are not clipped
+            assert st["bounds"][f][0] <= io["after"] <= st["bounds"][f][1]
 
 
 def test_whatif_sugar_raises_volume_and_weight():
