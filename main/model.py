@@ -106,6 +106,22 @@ def fit_rule_tree(X, y, max_depth=3, min_samples_leaf=5, seed=0):
     return DecisionTreeRegressor(max_depth=max_depth, min_samples_leaf=min_samples_leaf, random_state=seed).fit(X, y)
 
 
+def select_rule_tree(X, y, fold, grid, seed=0):
+    """(max_depth, min_samples_leaf) with the best fold-OOF r2 on train; ties go to the fewest leaves,
+    then the smallest depth."""
+    scores = []
+    for d in grid["max_depth"]:
+        for leaf in grid["min_samples_leaf"]:
+            oof = pd.Series(np.nan, index=X.index)
+            for k in fold.unique():
+                te = fold == k
+                oof[te] = fit_rule_tree(X[~te], y[~te], d, leaf, seed).predict(X[te])
+            n_leaves = fit_rule_tree(X, y, d, leaf, seed).get_n_leaves()
+            scores.append((metrics(y, oof)["r2"], -n_leaves, -d, leaf))
+    r2, _, d, leaf = max(scores)
+    return -d, leaf, r2
+
+
 def export_rules(tree, feature_names, y_ref):
     """One rule per leaf: conditions, mean yield, batch count, high/low versus y_ref."""
     t, rules = tree.tree_, []

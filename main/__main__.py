@@ -13,7 +13,7 @@ import pandas as pd
 from main.data import (ART, DATA, DT, assemble, batch_meta, batch_yield_kg, cfg, feature_cols, load_raw,
                        load_split, load_ts, make_split, names, offline_available, raw_path, read_json, write_json)
 from main.model import (baselines, bootstrap_ci, dummy_check, export_rules, fit_rule_tree, global_importance,
-                        load_xgb, make_xgb, metrics, oof_predict, search_params, shap_values)
+                        load_xgb, make_xgb, metrics, oof_predict, search_params, select_rule_tree, shap_values)
 from main.warning import (band_alarm, band_flags, combine, deviation, fit_band, lowest_cut, resolve_ranges,
                           risk_grade, risk_score, save_bands, sustained, warning_metrics)
 
@@ -212,12 +212,16 @@ def run_explain():
     sh = pd.concat([shap_values(load_xgb(ART / f"xgb_fold{k}.json"), X.loc[g.index])
                     for k, g in table.loc[tr].groupby("fold")])
     tree_cfg, dummy_cfg = c["tree"], c["dummy"]
-    tree = fit_rule_tree(X.loc[tr], y.loc[tr], tree_cfg["max_depth"], tree_cfg["min_samples_leaf"], c["seed"])
+    depth, leaf, cv_r2 = select_rule_tree(X.loc[tr], y.loc[tr], table.fold.loc[tr], tree_cfg, c["seed"])
+    tree = fit_rule_tree(X.loc[tr], y.loc[tr], depth, leaf, c["seed"])
     r2 = {s: metrics(y.loc[ids], tree.predict(X.loc[ids]))["r2"] for s, ids in (("train", tr), ("val", va))}
+    r2["train_cv"] = cv_r2
     y_ref = float(y.loc[tr].mean())
     rules = export_rules(tree, q["features"], y_ref)
+    reference_only = not r2["val"] > 0  # rules that do not beat the mean on val are shown as reference only
     write_json(ART / "rules.json", {
-        "rules": rules, "r2": r2,
+        "rules": rules, "r2": r2, "params": {"max_depth": depth, "min_samples_leaf": leaf},
+        "reference_only": reference_only,
         "leaf": {str(b): int(l) for b, l in zip(X.index, tree.apply(X))}})
     dc = dummy_check(X.loc[tr], y.loc[tr], q["params"], **dummy_cfg)
 
@@ -225,7 +229,8 @@ def run_explain():
     meaningless = set(dc.index[dc.meaningless])
     sliders = set(c["sliders"])
     print("top features: " + ", ".join(f"{f} {v:.0f}" for f, v in top.items()) + " (mean |SHAP| kg)")
-    print(f"rule tree: train r2 {r2['train']:.3f}, val r2 {r2['val']:.3f}")
+    print(f"rule tree: max_depth {depth}, min_samples_leaf {leaf}; train r2 {r2['train']:.3f}, "
+          f"train cv r2 {cv_r2:.3f}, val r2 {r2['val']:.3f}{' (reference only)' if reference_only else ''}")
     for r in rules:
         print(f"- {r['text']}")
     print(f"dummy check: {len(meaningless)}/{len(dc)} features meaningless "

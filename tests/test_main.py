@@ -206,3 +206,9 @@ def test_test_step_on_synthetic_batches(s, tmp_path, monkeypatch, capsys):
     assert (art_dir / "test_evaluated.json").exists() and not (ART / "test_evaluated.json").exists()
     with pytest.raises(SystemExit):  # second run refused
         pipeline.run_test()
+
+
+def test_rule_tree_beats_mean_or_is_marked():
+    r = read_json(ART / "rules.json")
+    assert r["r2"]["val"] > 0 or r["reference_only"]
+    assert r["reference_only"] == (not r["r2"]["val"] > 0)

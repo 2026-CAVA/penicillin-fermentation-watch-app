@@ -89,7 +89,8 @@ def batch_view(batch_id):
         "risk": {"R": _lst(rk.R), "grade": rk.grade.tolist(), "band_alarm": rk.band_alarm.astype(bool).tolist(),
                  "cuts": cuts, "alarm_top3": causes},
         "shap_top3": top_k_drivers(shap_values(model, xf).iloc[0], x),
-        "rule": {**next(r for r in s["rules"]["rules"] if r["leaf"] == leaf), "tree_r2": s["rules"]["r2"]},
+        "rule": {**next(r for r in s["rules"]["rules"] if r["leaf"] == leaf), "tree_r2": s["rules"]["r2"],
+                 "reference_only": s["rules"]["reference_only"]},
         "whatif": {
             "note": "Computed from patterns the model learned, not a causal effect. "
                     "Only first-half (0 to t_cut) operation is changed. "

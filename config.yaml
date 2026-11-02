@@ -117,7 +117,7 @@ xgb:
   cv_seeds: [0, 1, 2]
   min_gain: 0.02          # search must beat the fixed params by >= 2% CV RMSE
 
-tree: {max_depth: 3, min_samples_leaf: 5}
+tree: {max_depth: [1, 2, 3], min_samples_leaf: [5, 10, 15, 20]}   # chosen by train fold-OOF r2
 dummy: {n_dummy: 3, n_seeds: 10, flag_frac: 0.7}
 
 demo_batches: []          # test batches for the presentation; must be set before `python -m main test`
