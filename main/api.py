@@ -1,10 +1,12 @@
 """HTTP API over main.service. Paths follow the FermentIQ mockup (VITE_FERMENTIQ_API_URL); run `python -m main serve`.
 
-    GET  /batches                  list (mockup BatchSummary rows)
-    GET  /batches/{id}             summary + per-time-point series
-    GET  /batches/{id}/shap?t=&k=  yield SHAP top k (default 5, k=0 for all; t is accepted but not used yet)
+    t (hours, optional): only data up to t, as if the batch were still running (Replay)
+    GET  /batches?t=               list (mockup BatchSummary rows)
+    GET  /batches/{id}?t=          summary + per-time-point series
+    GET  /batches/{id}/shap?t=&k=  yield SHAP top k (default 5, k=0 for all); empty before t_cut
+    GET  /batches/{id}/contrib?t=  R(t) contribution per variable at t (the per-time explanation)
     POST /simulate                 {"batch_id": 92, "changes": {"Fpaa_tot": 0.05}} -> run_whatif
-    GET  /batches/{id}/events?all= excursions per variable (>= 1 h) during alarms; all=true for every one
+    GET  /batches/{id}/events?all=&t= excursions per variable (>= 1 h) during alarms; all=true for every one
     GET  /compare?ids=6,92&vars=DO,pH   batches side by side (one id: a reference batch is added)
     GET  /model                    model, target, validation metrics, alarm rule, demo batches
 """
@@ -23,27 +25,40 @@ def _known(batch_id):
         raise HTTPException(404, f"unknown batch {batch_id}")
 
 
+def _call(f, *args):
+    try:
+        return f(*args)
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+
+
 @app.get("/batches")
-def batches():
-    return [service.summary(b) for b in service._state()["table"].index]
+def batches(t: float | None = None):
+    return [_call(service.summary, b, t) for b in service._state()["table"].index]
 
 
 @app.get("/batches/{batch_id}")
-def batch(batch_id: int):
+def batch(batch_id: int, t: float | None = None):
     _known(batch_id)
-    return service.detail(batch_id)
+    return _call(service.detail, batch_id, t)
 
 
 @app.get("/batches/{batch_id}/shap")
 def shap(batch_id: int, t: float | None = None, k: int = 5):
     _known(batch_id)
-    return service.shap_top(batch_id, k or None)
+    return service.shap_top(batch_id, k or None, t)
+
+
+@app.get("/batches/{batch_id}/contrib")
+def contrib(batch_id: int, t: float):
+    _known(batch_id)
+    return _call(service.contrib, batch_id, t)
 
 
 @app.get("/batches/{batch_id}/events")
-def events(batch_id: int, all: bool = False):
+def events(batch_id: int, all: bool = False, t: float | None = None):
     _known(batch_id)
-    return service.events(batch_id, all)
+    return _call(service.events, batch_id, all, t)
 
 
 @app.get("/compare")

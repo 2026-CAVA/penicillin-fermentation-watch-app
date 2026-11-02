@@ -1,9 +1,10 @@
 """(5) The only entry point for the front end. Reads data/cache/ and artifacts/; returns JSON-safe dicts.
 
     list_batches() -> list[dict]
-    batch_view(batch_id) -> dict
+    batch_view(batch_id, t=None) -> dict       t: data up to t only (a running batch)
     run_whatif(batch_id, changes) -> dict     changes = {"Fpaa_tot": 0.05, ...}  (relative, +5%)
-    summary(batch_id), detail(batch_id), shap_top(batch_id) -> FermentIQ mockup shapes (served by main.api)
+    summary(batch_id, t), detail(batch_id, t), shap_top(batch_id, k, t) -> FermentIQ mockup shapes (main.api)
+    contrib(batch_id, t) -> dict              R(t) contribution per variable at time t
     model_info() -> dict                      model, target, val metrics, alarm rule, demo batches
     events(batch_id), explanation(batch_id)   excursion list, first-alarm sentence
     compare(ids, vars), reference_batch(id)  series of several batches side by side
@@ -75,12 +76,15 @@ def list_batches():
             for b, r in _state()["table"].iterrows()]
 
 
-def batch_view(batch_id):
+def batch_view(batch_id, t=None):
+    """Everything for one batch. t: only data up to t, as if the batch were still running; the yield
+    prediction, SHAP, rule and sliders (all built from 0..t_cut) appear once t >= t_cut."""
     s = _state()
     row, (model, band, source) = s["table"].loc[batch_id], _route(batch_id)
     ranges, cuts, persist = s["th"]["ranges"], s["th"]["cuts"], s["th"]["persist"]
-    ts = offline_available(s["ts"][s["ts"].batch == batch_id]).reset_index(drop=True)
-    rk = s["risk"][s["risk"].batch == batch_id].reset_index(drop=True)
+    ts, rk = _batch(batch_id, t)
+    st = _status(batch_id, float(ts.t.iloc[-1]))
+    ready = st["pred"] is not None
     x = s["X"].loc[batch_id]
     xf = x.to_frame().T.astype(float)
     sh = shap_values(model, xf).iloc[0]
@@ -104,23 +108,25 @@ def batch_view(batch_id):
     return {
         "batch_id": int(batch_id), "group": row.group, "is_fault": bool(row.is_fault), "split": row.split,
         "tag": TAGS[row.split], "pred_source": source, "t_cut": s["split"]["t_cut"], "target": target(),
+        "running": st["running"], "t_now": float(ts.t.iloc[-1]),
         "light_final": rk.grade.iloc[-1], "light_worst": max(rk.grade, key=list(GRADES).index),
-        "y_pred_kg": float(model.predict(xf)[0]), "y_true_kg": float(row.y),
+        "y_pred_kg": float(model.predict(xf)[0]) if ready else None, "y_true_kg": st["measured"],
         "t": ts.t.tolist(), "series": series,
         "risk": {"R": _lst(rk.R), "grade": rk.grade.tolist(), "band_alarm": rk.band_alarm.astype(bool).tolist(),
                  "reason": alarm_reason(rk), "cuts": cuts, "alarm_top3": causes},
-        "events": events(batch_id), "explanation": explanation(batch_id),
-        "shap_top3": _drivers(sh, x), "shap_base": float(sh["_base"]),
-        "shap_all": _drivers(sh, x, k=len(x)),  # every feature, largest |shap| first; base + sum = y_pred_kg
+        "events": events(batch_id, t=t), "explanation": explanation(batch_id, t),
+        "shap_top3": _drivers(sh, x) if ready else [], "shap_base": float(sh["_base"]) if ready else None,
+        # every feature, largest |shap| first; base + sum = y_pred_kg
+        "shap_all": _drivers(sh, x, k=len(x)) if ready else [],
         "rule": {**next(r for r in s["rules"]["rules"] if r["leaf"] == leaf), "tree_r2": s["rules"]["r2"],
-                 "reference_only": s["rules"]["reference_only"]},
+                 "reference_only": s["rules"]["reference_only"]} if ready else None,
         "whatif": {
             "note": "Computed from patterns the model learned, not a causal effect. "
                     "Only first-half (0 to t_cut) operation is changed. "
                     "Acid, base, cooling and heating water flows are set by the pH and temperature controllers.",
             "sliders": [{"feature": f, "label": cfg()["sliders"][f], "value": float(x[f]), "min": lo, "max": hi,
                          "curve": response_curve(model, x, f, s["bounds"])}
-                        for f, (lo, hi) in s["bounds"].items()],
+                        for f, (lo, hi) in s["bounds"].items()] if ready else [],
             "rule_by_var": rule_whatif_by_var(ts, ranges, cuts, persist).to_dict("records"),
             "rule_all": rule_whatif(ts, ranges, cuts, persist=persist),
             "rule_note": "Per-variable reductions do not add up: a time point with several excursions "
@@ -151,35 +157,67 @@ def _y_pred(batch_id):
     return float(model.predict(_state()["X"].loc[[batch_id]].astype(float))[0])
 
 
-def summary(batch_id):
-    """One row of the batch list. A finished batch: elapsedH = plannedEndH = last time point."""
+def _risk(batch_id, t=None):
+    """risk_ts rows of a batch up to t (all rows when t is None). Every column there is causal."""
+    rk = _state()["risk"]
+    rk = rk[rk.batch == batch_id]
+    rk = rk if t is None else rk[rk.t <= t + 1e-9]
+    if rk.empty:
+        raise ValueError(f"t = {t} is before the first time point")
+    return rk.reset_index(drop=True)
+
+
+def _batch(batch_id, t=None):
+    """Real-time view (offline values delayed and held) and risk rows, both cut at t."""
+    rk = _risk(batch_id, t)
+    ts = offline_available(_state()["ts"][_state()["ts"].batch == batch_id]).reset_index(drop=True)
+    return ts.iloc[:len(rk)], rk
+
+
+def _status(batch_id, now):
+    """running while now < the batch end; the end, the measured yield and (before t_cut) the prediction are
+    not known yet."""
     s = _state()
-    rk = s["risk"][s["risk"].batch == batch_id]
-    state, t = rk.grade.map(STATE), rk.t.to_numpy()
+    end = float(s["risk"].t[s["risk"].batch == batch_id].max())
+    running = now < end - 1e-9
+    return {"running": running, "end": None if running else end,
+            "pred": _y_pred(batch_id) if now >= s["split"]["t_cut"] else None,
+            "measured": None if running else float(s["table"].y[batch_id])}
+
+
+def summary(batch_id, t=None):
+    """One row of the batch list as of t (None = the whole batch, completed)."""
+    s = _state()
+    rk = _risk(batch_id, t)
+    state, tt = rk.grade.map(STATE), rk.t.to_numpy()
+    st = _status(batch_id, tt[-1])
     first = np.flatnonzero(state.ne(state.shift()).to_numpy())  # start of each run of one state
-    ends = [*t[first[1:]], t[-1] + DT]  # a segment ends where the next one starts
-    anomaly = t[(state == "anomaly").to_numpy()]
-    return {"id": int(batch_id), "runStatus": "completed", "elapsedH": float(t[-1]), "plannedEndH": float(t[-1]),
-            "state": STATE[max(rk.grade, key=list(GRADES).index)], "predictedFinal": _y_pred(batch_id),
-            "latestScore": float(rk.R.iloc[-1]), "scoreCuts": s["th"]["cuts"],
-            "finalMeasured": float(s["table"].y[batch_id]),
-            "firstAnomalyH": float(anomaly[0]) if len(anomaly) else None, "anomalyDurationH": len(anomaly) * DT,
-            "segments": [{"start": float(t[i]), "end": float(e), "state": state.iloc[i]} for i, e in zip(first, ends)]}
+    ends = [*tt[first[1:]], tt[-1] + DT]  # a segment ends where the next one starts
+    anomaly = tt[(state == "anomaly").to_numpy()]
+    return {"id": int(batch_id), "runStatus": "running" if st["running"] else "completed",
+            "elapsedH": float(tt[-1]), "plannedEndH": st["end"],
+            "state": STATE[max(rk.grade, key=list(GRADES).index)], "predictedFinal": st["pred"],
+            "latestScore": float(rk.R.iloc[-1]), "scoreCuts": s["th"]["cuts"], "finalMeasured": st["measured"],
+            "firstAnomalyH": float(anomaly[0]) if len(anomaly) else None,
+            "anomalyDurationH": round(len(anomaly) * DT, 4),
+            "segments": [{"start": float(tt[i]), "end": round(float(e), 4), "state": state.iloc[i]}
+                         for i, e in zip(first, ends)]}
 
 
-def detail(batch_id):
-    """summary + one row per time point. penicillin = offline P as known in real time (4 h delay, held);
-    predictedFinal exists from t_cut on (the model predicts once, at t_cut)."""
+def detail(batch_id, t=None):
+    """summary + one row per time point up to t. penicillin = offline P as known in real time (4 h delay,
+    held); predictedFinal exists from t_cut on (the model predicts once, at t_cut)."""
     s = _state()
-    ts = offline_available(s["ts"][s["ts"].batch == batch_id]).reset_index(drop=True)
-    rk = s["risk"][s["risk"].batch == batch_id].reset_index(drop=True)
+    ts, rk = _batch(batch_id, t)
+    pred = _y_pred(batch_id) if ts.t.iloc[-1] >= s["split"]["t_cut"] else np.nan
     rows = pd.DataFrame({"t": ts.t, **{k: ts[c] for k, c in SERIES.items()}, "score": rk.R,
                          "state": rk.grade.map(STATE),
-                         "predictedFinal": np.where(ts.t >= s["split"]["t_cut"], _y_pred(batch_id), np.nan)})
+                         "predictedFinal": np.where(ts.t >= s["split"]["t_cut"], pred, np.nan)})
     rows = rows.astype(object).where(rows.notna(), None)
     meta = {k: {"column": c, **_meta(c)} for k, c in SERIES.items()}
-    return {**summary(batch_id), "intervalH": DT, "shapBase": _shap(batch_id)["_base"],
-            "explanation": explanation(batch_id)["text"], "seriesMeta": meta,
+    return {**summary(batch_id, t), "intervalH": DT,
+            "shapBase": _shap(batch_id)["_base"] if np.isfinite(pred) else None,
+            "explanation": explanation(batch_id, t)["text"], "seriesMeta": meta,
             "series": rows.to_dict("records")}
 
 
@@ -189,11 +227,25 @@ def _shap(batch_id):
     return shap_values(model, _state()["X"].loc[[batch_id]].astype(float)).iloc[0].astype(float).to_dict()
 
 
-def shap_top(batch_id, k=5):
-    """Yield SHAP (one per batch, not per time point), largest |value| first; k=None for every feature."""
+def shap_top(batch_id, k=5, t=None):
+    """Yield SHAP (one per batch, not per time point), largest |value| first; k=None for every feature.
+    Empty before t_cut: there is no yield prediction yet."""
+    if t is not None and t < _state()["split"]["t_cut"]:
+        return []
     sh = pd.Series(_shap(batch_id)).drop("_base")
     return [{"feature": f, "label": feature_label(f), "value": float(sh[f])}
             for f in sh.abs().sort_values(ascending=False).index[:k]]
+
+
+def contrib(batch_id, t):
+    """Why R(t) is what it is at time t: each variable's share of the deviation (the per-time explanation;
+    yield SHAP does not change over time)."""
+    ts, rk = _batch(batch_id, t)
+    share = risk_contrib(deviation(ts.iloc[[-1]], _state()["th"]["ranges"]), _state()["th"]["ranges"]).iloc[0]
+    return {"t": float(rk.t.iloc[-1]), "R": float(rk.R.iloc[-1]), "grade": rk.grade.iloc[-1],
+            "reason": alarm_reason(rk.iloc[[-1]])[0],
+            "contrib": [{"var": v, "label": col_meta(v)["label"], "share_pct": float(p)}
+                        for v, p in share.sort_values(ascending=False).items() if p > 0]}
 
 
 def model_info():
@@ -217,20 +269,15 @@ def model_info():
 
 # --- events and alarm explanation (P3) -------------------------------------------------------------
 
-def _batch(batch_id):
-    s = _state()
-    return (offline_available(s["ts"][s["ts"].batch == batch_id]).reset_index(drop=True),
-            s["risk"][s["risk"].batch == batch_id].reset_index(drop=True))
-
-
 @cache
-def events(batch_id, all=False):
+def events(batch_id, all=False, t=None):
     """Excursions per variable that last >= the alarm persistence (1 h): outside the normal band (band
     variables) or outside the safety range (R(t) variables). Sorted by start; end is exclusive.
     all=False keeps only excursions that overlap an alarm (grade above STABLE): normal batches have many
-    short, harmless excursions (median 11 per val normal batch)."""
+    short, harmless excursions (median 11 per val normal batch). t: only data up to t (an excursion still
+    going on at t ends at t)."""
     s = _state()
-    ts, rk = _batch(batch_id)
+    ts, rk = _batch(batch_id, t)
     th, rank = s["th"], list(GRADES).index
     t, n = ts.t.to_numpy(), th["persist"]
     signs = [("band", v, rk[f"band_{v}"].to_numpy()) for v in s["bands"]["full"]["vars"].tolist()]
@@ -260,10 +307,10 @@ def alarm_reason(rk):
 
 
 @cache
-def explanation(batch_id):
-    """One sentence on the first alarm (time, grade, why, main variables) and the worst grade."""
+def explanation(batch_id, t=None):
+    """One sentence on the first alarm (time, grade, why, main variables) and the worst grade, up to t."""
     s = _state()
-    ts, rk = _batch(batch_id)
+    ts, rk = _batch(batch_id, t)
     th = s["th"]
     on = np.flatnonzero((rk.grade != "STABLE").to_numpy())
     h = th["persist"] * DT

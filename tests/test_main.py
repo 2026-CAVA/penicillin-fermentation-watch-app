@@ -233,7 +233,8 @@ def test_api_matches_mockup_contract(s):
     assert seg[0]["start"] == d["series"][0]["t"] and all(a["end"] == b["start"] for a, b in zip(seg, seg[1:]))
     t_cut = s["split"]["t_cut"]
     assert all((x["predictedFinal"] is None) == (x["t"] < t_cut) for x in d["series"])
-    sh = c.get(f"/batches/{bid}/shap?t=50").json()
+    assert c.get(f"/batches/{bid}/shap?t=50").json() == []  # no yield prediction before t_cut
+    sh = c.get(f"/batches/{bid}/shap?t=150").json()
     assert len(sh) == 5 and set(sh[0]) == {"feature", "label", "value"}
     r = c.post("/simulate", json={"batch_id": bid, "changes": {"Fpaa_tot": 0.05}})
     assert r.status_code == 200 and "delta" in r.json()
@@ -302,3 +303,42 @@ def test_compare(s):
     assert len(c.get("/compare?ids=6,92,62").json()["batches"]) == 3
     assert c.get("/compare?ids=6&vars=nope").status_code == 422 and c.get("/compare?ids=x").status_code == 422
     assert c.get("/compare?ids=999").status_code == 404
+
+
+@pytest.mark.parametrize("t0", [100.0, 150.0])
+def test_replay_has_no_future(t0, monkeypatch):
+    """Responses at t0 do not change when everything after t0 is replaced with garbage."""
+    def views():
+        for f in (service.events, service.explanation):
+            f.cache_clear()
+        return json.dumps([service.detail(92, t0), service.batch_view(92, t0), service.events(92, True, t0),
+                           service.contrib(92, t0), service.shap_top(92, 5, t0)], sort_keys=True, default=str)
+    base = views()
+    st = dict(service._state())
+    ts, risk = st["ts"].copy(), st["risk"].copy()
+    late = (ts.batch == 92) & (ts.t > t0)
+    num = [c for c in names("input") + names("display") if c in ts]
+    ts.loc[late, num] = ts.loc[late, num] * 10 + 7
+    rl = (risk.batch == 92) & (risk.t > t0)
+    risk.loc[rl, ["R", "grade", "grade_r"]] = [99.0, "CRITICAL", "CRITICAL"]
+    st |= {"ts": ts, "risk": risk}
+    monkeypatch.setattr(service, "_state", lambda: st)
+    try:
+        assert views() == base
+        d = json.loads(base)[0]
+        assert d["runStatus"] == "running" and d["finalMeasured"] is None and d["plannedEndH"] is None
+        assert max(x["t"] for x in d["series"]) <= t0 and (d["predictedFinal"] is None) == (t0 < 115)
+    finally:
+        for f in (service.events, service.explanation):
+            f.cache_clear()
+
+
+def test_replay_api():
+    from fastapi.testclient import TestClient
+    from main.api import app
+    c = TestClient(app)
+    rows = c.get("/batches?t=100").json()
+    assert {r["runStatus"] for r in rows} == {"running"} and all(r["predictedFinal"] is None for r in rows)
+    assert c.get("/batches/92?t=0.1").status_code == 422 and c.get("/batches/92/contrib").status_code == 422
+    r = c.get("/batches/92/contrib?t=150").json()
+    assert r["t"] == 150 and abs(sum(x["share_pct"] for x in r["contrib"]) - 100) < 1e-6
