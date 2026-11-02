@@ -94,10 +94,15 @@ def risk_contrib(dev, ranges):
 
 # --- alarm rule and thresholds -----------------------------------------------
 
+def sustained(x, batch, n):
+    """Lowest value over the last n points of the same batch (causal); 0 until n points exist.
+    sustained(R) >= cut  <=>  R stayed at or above cut for n consecutive points."""
+    return x.astype(float).groupby(batch).transform(lambda s: s.rolling(n, min_periods=n).min()).fillna(0)
+
+
 def band_alarm(n_flagged, batch, n_vars, consec):
     """True when >= n_vars band excursions held for the last `consec` points (causal)."""
-    hit = (n_flagged >= n_vars).astype(float)
-    return hit.groupby(batch).transform(lambda s: s.rolling(consec, min_periods=consec).min()).fillna(0).astype(bool)
+    return sustained(n_flagged >= n_vars, batch, consec).astype(bool)
 
 
 def combine(grade_r, alarm):
@@ -106,7 +111,8 @@ def combine(grade_r, alarm):
 
 
 def lowest_cut(r, target, start=1):
-    """Smallest integer cut whose alarm rate (r >= cut) is within target; 101 = never fires."""
+    """Smallest integer cut whose alarm rate (r >= cut) is within target; 101 = never fires.
+    r = one peak per batch gives a batch-level rate."""
     for c in range(start, 101):
         if (r >= c).mean() <= target:
             return c

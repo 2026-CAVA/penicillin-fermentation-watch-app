@@ -54,7 +54,7 @@ def list_batches():
 def batch_view(batch_id):
     s = _state()
     row, (model, band, source) = s["table"].loc[batch_id], _route(batch_id)
-    ranges, cuts = s["th"]["ranges"], s["th"]["cuts"]
+    ranges, cuts, persist = s["th"]["ranges"], s["th"]["cuts"], s["th"]["persist"]
     ts = offline_available(s["ts"][s["ts"].batch == batch_id]).reset_index(drop=True)
     rk = s["risk"][s["risk"].batch == batch_id].reset_index(drop=True)
     x = s["X"].loc[batch_id]
@@ -93,8 +93,8 @@ def batch_view(batch_id):
             "sliders": [{"feature": f, "label": lab, "value": float(x[f]), "min": s["bounds"][f][0],
                          "max": s["bounds"][f][1], "curve": response_curve(model, x, f, s["bounds"])}
                         for f, lab in cfg()["sliders"].items()],
-            "rule_by_var": rule_whatif_by_var(ts, ranges, cuts).to_dict("records"),
-            "rule_all": rule_whatif(ts, ranges, cuts),
+            "rule_by_var": rule_whatif_by_var(ts, ranges, cuts, persist).to_dict("records"),
+            "rule_all": rule_whatif(ts, ranges, cuts, persist=persist),
             "rule_note": "Per-variable reductions do not add up: a time point with several excursions "
                          "may remain critical when only one variable is fixed.",
         },

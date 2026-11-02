@@ -15,7 +15,7 @@ from main.data import (ART, DATA, DT, assemble, batch_meta, batch_yield_kg, cfg,
 from main.model import (baselines, bootstrap_ci, dummy_check, export_rules, fit_rule_tree, global_importance,
                         load_xgb, make_xgb, metrics, oof_predict, search_params, shap_values)
 from main.warning import (band_alarm, band_flags, combine, deviation, fit_band, lowest_cut, resolve_ranges,
-                          risk_grade, risk_score, save_bands, warning_metrics)
+                          risk_grade, risk_score, save_bands, sustained, warning_metrics)
 
 
 def _md(df, fmt="{:.3g}"):
@@ -120,24 +120,30 @@ def run_warning():
     risk["R"] = risk_score(deviation(rt, ranges), ranges)
     risk["band_n"] = (flags != 0).sum(axis=1)
 
-    v = risk.batch.isin(split["val"])
-    warn = lowest_cut(risk.R[v], w["far_r_warning"])
-    crit = lowest_cut(risk.R[v], w["far_r_critical"], start=warn + 1)
-    rule = next(((n, k) for n in w["band_n_vars"] for k in w["band_consec"]
-                 if band_alarm(risk.band_n[v], risk.batch[v], n, k).mean() <= w["far_band"]),
+    v, n = risk.batch.isin(split["val"]), w["persist"]
+    held = sustained(risk.R, risk.batch, n)  # R(t) grades count only after n consecutive points
+
+    def batch_rate(alarm):  # share of val normal batches with at least one alarm point
+        return alarm[v].groupby(risk.batch[v]).any().mean()
+
+    peak = held[v].groupby(risk.batch[v]).max()
+    warn = lowest_cut(peak, w["far_warning"])
+    crit = lowest_cut(peak, w["far_critical"], start=warn + 1)
+    rule = next(((nv, k) for nv in w["band_n_vars"] for k in w["band_consec"]
+                 if batch_rate((held >= warn) | band_alarm(risk.band_n, risk.batch, nv, k)) <= w["far_warning"]),
                 (len(bc["vars"]) + 1, 1))  # nothing fits: band never raises the signal
     risk["band_alarm"] = band_alarm(risk.band_n, risk.batch, *rule)
-    risk["grade_r"] = risk_grade(risk.R, [warn, crit])
+    risk["grade_r"] = risk_grade(held, [warn, crit])
     risk["grade"] = combine(risk.grade_r, risk.band_alarm)
     risk.to_parquet(DATA / "risk_ts.parquet")
 
     val = {name: warning_metrics(risk, a, [], split["val"]) for name, a in signals(risk).items()}
     write_json(ART / "thresholds.json", {
-        "cuts": [warn, crit], "band_rule": {"n_vars": rule[0], "consec": rule[1]},
+        "cuts": [warn, crit], "persist": n, "band_rule": {"n_vars": rule[0], "consec": rule[1]},
         "ranges": ranges, "val_far": val})
 
     n_val, ww, cc = len(split["val"]), val["combined_warning+"], val["combined_critical"]
-    print(f"R(t) cuts: WARNING >= {warn}, CRITICAL >= {crit}; "
+    print(f"R(t) cuts: WARNING >= {warn}, CRITICAL >= {crit}, held {n} points ({n * DT * 60:.0f} min); "
           f"band rule: >= {rule[0]} vars for {rule[1]} points ({rule[1] * DT * 60:.0f} min)")
     print(f"val normal false alarms: "
           f"WARNING+ {ww['far_points']:.1%} of points, {ww['far_batches'] * n_val:.0f}/{n_val} batches; "

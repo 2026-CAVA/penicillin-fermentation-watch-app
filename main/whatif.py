@@ -3,7 +3,7 @@ import numpy as np
 import pandas as pd
 
 from main.model import shap_values, top_k_drivers
-from main.warning import deviation, risk_score
+from main.warning import deviation, risk_score, sustained
 
 
 # Mass balance: linked += factor x (slider change). Extra sugar feed (L) stays in the vessel, so the
@@ -50,24 +50,26 @@ def response_curve(model, x_row, feature, bounds, n=25, coupled=COUPLED):
     return {"x": grid.tolist(), "y": model.predict(X).astype(float).tolist()}
 
 
-def _n_critical(ts, ranges, cuts):
-    return int((risk_score(deviation(ts, ranges), ranges) >= cuts[1]).sum())
+def _n_critical(ts, ranges, cuts, persist):
+    r = risk_score(deviation(ts, ranges), ranges)
+    return int((sustained(r, 0 * r, persist) >= cuts[1]).sum())
 
 
-def rule_whatif(ts_batch, ranges, cuts, fix_vars="all"):
-    """Pull out-of-range values back to the boundary, recompute R(t), count CRITICAL points (R-based)."""
+def rule_whatif(ts_batch, ranges, cuts, fix_vars="all", persist=1):
+    """Pull out-of-range values back to the boundary, recompute R(t), count CRITICAL points (R-based,
+    R held >= the cut for `persist` points)."""
     vs = list(ranges) if fix_vars == "all" else list(fix_vars)
     fixed = ts_batch.copy()
     for v in vs:
         fixed[v] = fixed[v].clip(ranges[v]["lo"], ranges[v]["hi"])
-    before, after = _n_critical(ts_batch, ranges, cuts), _n_critical(fixed, ranges, cuts)
+    before, after = _n_critical(ts_batch, ranges, cuts, persist), _n_critical(fixed, ranges, cuts, persist)
     return {"vars": vs, "critical_before": before, "critical_after": after,
             "reduction_pct": 100 * (before - after) / before if before else 0.0}
 
 
-def rule_whatif_by_var(ts_batch, ranges, cuts):
+def rule_whatif_by_var(ts_batch, ranges, cuts, persist=1):
     """One variable at a time. Reductions do not add up: a point with several excursions may need all fixed."""
-    rows = [{"var": v, **rule_whatif(ts_batch, ranges, cuts, [v])} for v in ranges]
+    rows = [{"var": v, **rule_whatif(ts_batch, ranges, cuts, [v], persist)} for v in ranges]
     df = pd.DataFrame(rows).drop(columns="vars")
     df["reduction"] = df.critical_before - df.critical_after
     return df.sort_values("reduction", ascending=False, ignore_index=True)

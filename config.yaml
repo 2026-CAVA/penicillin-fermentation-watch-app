@@ -83,10 +83,10 @@ band:
   min_n: 10               # no band at time steps with fewer train batches
   std_floor_q: 0.1        # std floor = 10th percentile (over time) of the variable's positive stds
 
-warning:                  # thresholds from false-alarm targets on val normal batches (time-point rate)
-  far_r_warning: 0.025    # R(t) >= warning cut
-  far_r_critical: 0.01    # R(t) >= critical cut
-  far_band: 0.025         # band rule alone; union with R(t) keeps WARNING+ FAR <= 5%
+warning:                  # thresholds from false-alarm targets on val normal batches (batch rate)
+  persist: 5              # R(t) must stay >= a cut for 5 points (1 h); single-point spikes are common in normals
+  far_warning: 0.1        # share of val normal batches with any WARNING+ (R(t) or band rule)
+  far_critical: 0.0       # share of val normal batches with any CRITICAL
   band_n_vars: [1, 2, 3, 4]
   band_consec: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
 
