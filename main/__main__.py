@@ -326,7 +326,8 @@ def run_explain():
 
 
 def run_test():
-    """One-time test-set evaluation with frozen thresholds and the final model."""
+    """One-time test-set evaluation with frozen thresholds and final models, judged against the criteria
+    fixed in config.yaml (test_criteria) before the run. Numbers go to artifacts/test_results.json."""
     done, c, split = ART / "test_evaluated.json", cfg(), load_split()
     if done.exists():
         sys.exit(f"{done} exists: the test set is evaluated once. Do not re-run.")
@@ -338,17 +339,66 @@ def run_test():
     X, y, tr, te = table[q["features"]], table.y, split["train"], split["test"]
     t_fault = [b for b in te if table.is_fault[b]]
     t_norm = [b for b in te if not table.is_fault[b]]
+    parts = {"normal": t_norm, "fault": t_fault}
 
+    # (1) alarms
     warn = pd.DataFrame({k: warning_metrics(risk, a, t_fault, t_norm) for k, a in signals(risk).items()}).T
+    # (2) yield at t_cut: final model and baselines
     final = load_xgb(ART / "xgb.json")
     models = {"xgboost": final}
     for k, m in baselines(X.loc[tr], y.loc[tr]).items():
         models[f"baseline_{k}"] = m
-    parts = {"normal": t_norm, "fault": t_fault, "all": te}
     quality = pd.DataFrame({(part, name): metrics(y.loc[ids], m.predict(X.loc[ids]))
-                            for part, ids in parts.items() for name, m in models.items()}).T
+                            for part, ids in {**parts, "all": te}.items() for name, m in models.items()}).T
     ci = bootstrap_ci(y.loc[t_norm], final.predict(X.loc[t_norm]), seed=c["seed"])
+    # (3) yield trend: every provided cutoff, with the 80% range and the model spread
+    cp = pd.read_parquet(DATA / "cutoff_preds.parquet")
+    trend = {}
+    for h in [r["t_cut"] for r in read_json(ART / "cutoffs.json").values() if r["provided"]]:
+        for part, ids in parts.items():
+            d, yy = cp[cp.t_cut == h].loc[ids], y.loc[ids]
+            trend[f"{part} {h:g} h"] = {**metrics(yy, d.y_pred),
+                                        "coverage_range": float(yy.between(d.y_pred_lo, d.y_pred_hi).mean()),
+                                        "coverage_spread": float(yy.between(d.spread_lo, d.spread_hi).mean())}
+    # (4) P(t + h) forecast against persistence and linear extrapolation
+    fm, ts = read_json(ART / "forecast_meta.json"), load_ts()
+    fmodel, forecast = load_xgb(ART / "forecast.json"), {}
+    for part, ids in parts.items():
+        tsp = ts[ts.batch.isin(ids)]
+        R = fc.rows(tsp, fc.frame(tsp), fm["horizons"], fm["every_h"])
+        R["pred"] = fc.predict(fmodel, R, fm["features"])
+        for h, d in R.groupby("h"):
+            forecast[f"{part} {h:g}"] = {
+                "rmse": metrics(d.p_true, d.pred)["rmse"], "rmse_persistence": metrics(d.p_true, d.base)["rmse"],
+                "rmse_linear": metrics(d.p_true, fc.linear(d))["rmse"],
+                "coverage": float(((d.p_true - d.pred).abs() <= fm["halfwidth"][f"{h:g}"]).mean())}
+
+    # (5) verdicts on test normal batches; the criteria were fixed before the run
+    k = c["test_criteria"]
+    qn, wn, cn = quality.loc["normal"], warn.loc["combined_warning+"], warn.loc["combined_critical"]
+    trn = [v for key, v in trend.items() if key.startswith("normal")]
+    fn = [forecast[f"normal {h:g}"] for h in fm["horizons"]]
+    best_base = qn.rmse.drop("xgboost").min()
+    wins = [r["rmse"] < min(r["rmse_persistence"], r["rmse_linear"]) for r in fn]
+    cover = [r["coverage"] for r in fn]
+    verdicts = {
+        "normal batches with WARNING+": (wn["far_batches"], wn["far_batches"] <= k["normal_warning_max"]),
+        "normal batches with CRITICAL": (cn["far_batches"], cn["far_batches"] <= k["normal_critical_max"]),
+        "yield RMSE minus best baseline (kg)": (qn.rmse["xgboost"] - best_base, qn.rmse["xgboost"] < best_base),
+        "yield trend: lowest R2 over cutoffs": (min(v["r2"] for v in trn), min(v["r2"] for v in trn) > k["trend_r2_min"]),
+        "yield 80% range: lowest coverage": (min(v["coverage_range"] for v in trn),
+                                             min(v["coverage_range"] for v in trn) >= k["yield_coverage_min"]),
+        "forecast: share of horizons beating both baselines": (sum(wins) / len(wins), all(wins)),
+        "forecast 80% range: coverage min-max": ((min(cover), max(cover)), k["forecast_coverage"][0] <= min(cover)
+                                                 and max(cover) <= k["forecast_coverage"][1]),
+    }
+    write_json(ART / "test_results.json", {
+        "demo_batches": demo, "n_normal": len(t_norm), "n_fault": len(t_fault), "criteria": k,
+        "alarms": warn.to_dict("index"), "yield": {f"{a} {b}": m for (a, b), m in quality.to_dict("index").items()},
+        "yield_ci95_normal": ci, "yield_trend": trend, "forecast": forecast,
+        "verdicts": {name: {"value": v, "pass": bool(ok)} for name, (v, ok) in verdicts.items()}})
     write_json(done, {"evaluated_at": datetime.now().isoformat(timespec="seconds"), "demo_batches": demo})
+
     print(f"test: {len(t_norm)} normal + {len(t_fault)} fault batches; demo batches {demo}; "
           f"R(t) cuts {th['cuts']}, band rule {th['band_rule']}")
     for name in ("combined_warning+", "combined_critical"):
@@ -362,6 +412,19 @@ def run_test():
         print(f"{part + ' ' + name:<26}{m['rmse']:7.0f}{m['r2']:8.3f}")
     print(f"xgboost normal bootstrap 95%: rmse {ci['rmse'][0]:.0f}-{ci['rmse'][1]:.0f} kg, "
           f"r2 {ci['r2'][0]:.3f}-{ci['r2'][1]:.3f}")
+    print(f"{'yield trend':<18}{'rmse':>7}{'r2':>8}{'range':>8}{'spread':>8}")
+    for key, m in trend.items():
+        print(f"{key:<18}{m['rmse']:7.0f}{m['r2']:8.3f}{m['coverage_range']:8.0%}{m['coverage_spread']:8.0%}")
+    print(f"{'forecast (g/L)':<16}{'rmse':>7}{'persist':>9}{'linear':>8}{'cover':>7}")
+    for part in parts:
+        for h in ("0.5", "4", "8"):
+            r = forecast[f"{part} {h}"]
+            print(f"{part + ' ' + h + ' h':<16}{r['rmse']:7.2f}{r['rmse_persistence']:9.2f}{r['rmse_linear']:8.2f}"
+                  f"{r['coverage']:7.0%}")
+    print("criteria (test normal batches, fixed before the run):")
+    for name, (v, ok) in verdicts.items():
+        shown = f"{v[0]:.2f}-{v[1]:.2f}" if isinstance(v, tuple) else f"{v:.3g}"
+        print(f"  {'PASS' if ok else 'FAIL'}  {name}: {shown}")
 
 
 def run_serve():

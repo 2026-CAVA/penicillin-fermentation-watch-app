@@ -176,13 +176,16 @@ def test_test_step_on_synthetic_batches(s, tmp_path, monkeypatch, capsys):
     """Run the test step end to end without touching the real test set: val normal batches play the
     test normals, and copies of val batches with a fault window from 50 h play the fault batches."""
     import main.data as data_mod
-    sp, risk, table = s["split"], s["risk"], s["table"].copy()  # do not touch the shared fixture
+    sp, risk, table, ts = s["split"], s["risk"], s["table"].copy(), s["ts"]  # do not touch the shared fixture
+    cp = pd.read_parquet(DATA / "cutoff_preds.parquet")
     normals, sources = sp["val"][:5], sp["val"][5:8]
     fakes = {900 + i: b for i, b in enumerate(sources, start=1)}
     for fake, src in fakes.items():
         r = risk[risk.batch == src].assign(batch=fake)
         r["fault_ref"] = (r.t >= 50).astype(int)
         risk = pd.concat([risk, r], ignore_index=True)
+        ts = pd.concat([ts, ts[ts.batch == src].assign(batch=fake)], ignore_index=True)
+        cp = pd.concat([cp, cp.loc[[src]].rename(index={src: fake})])
         table.loc[fake] = table.loc[src]
         table.loc[fake, "is_fault"] = True
 
@@ -191,8 +194,10 @@ def test_test_step_on_synthetic_batches(s, tmp_path, monkeypatch, capsys):
     art_dir.mkdir()
     risk.to_parquet(data_dir / "risk_ts.parquet")
     table.to_parquet(data_dir / "batch_table.parquet")
+    ts.to_parquet(data_dir / "timeseries.parquet")
+    cp.to_parquet(data_dir / "cutoff_preds.parquet")
     (data_dir / "split.json").write_text(json.dumps({**sp, "test": normals + list(fakes)}), encoding="utf-8")
-    for f in ("thresholds.json", "quality.json", "xgb.json"):
+    for f in ("thresholds.json", "quality.json", "xgb.json", "cutoffs.json", "forecast.json", "forecast_meta.json"):
         (art_dir / f).write_bytes((ART / f).read_bytes())
     for mod in (data_mod, pipeline):
         monkeypatch.setattr(mod, "DATA", data_dir)
@@ -204,6 +209,9 @@ def test_test_step_on_synthetic_batches(s, tmp_path, monkeypatch, capsys):
     print(out)  # shown with `pytest -rP`
     assert "test: 5 normal + 3 fault batches" in out and "combined_warning+: detected" in out
     assert (art_dir / "test_evaluated.json").exists() and not (ART / "test_evaluated.json").exists()
+    res = read_json(art_dir / "test_results.json")
+    assert len(res["verdicts"]) == 7 and "normal 161 h" in res["yield_trend"] and "fault 8" in res["forecast"]
+    assert not (ART / "test_results.json").exists()
     with pytest.raises(SystemExit):  # second run refused
         pipeline.run_test()
 

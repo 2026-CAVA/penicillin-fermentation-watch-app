@@ -144,5 +144,16 @@ forecast:                 # P(t + h), h = step_h .. horizon_h (main/forecast.py)
 tree: {max_depth: [1, 2, 3], min_samples_leaf: [5, 10, 15, 20]}   # chosen by train fold-OOF r2
 dummy: {n_dummy: 3, n_seeds: 10, flag_frac: 0.7}
 
+# Pass criteria for the one-time test run, fixed (committed) before it; judged on the 15 test normal batches.
+# Fault detection is reported without a target. With 15 batches one batch is 6.7%, so the alarm limits
+# allow binomial noise around the tuning targets (10% / 5%).
+test_criteria:
+  normal_warning_max: 0.2        # <= 3/15 test normal batches with any WARNING+
+  normal_critical_max: 0.14      # <= 2/15 with any CRITICAL
+  trend_r2_min: 0.0              # yield R2 > 0 at every provided cutoff (115, 138, 161 h)
+  yield_coverage_min: 0.6        # the 80% yield range covers >= 9/15 at every provided cutoff
+  forecast_coverage: [0.7, 0.9]  # the 80% P(t + h) range covers 70-90% at every horizon
+  # also: yield RMSE at t_cut below every baseline; forecast RMSE below persistence and linear at every horizon
+
 demo_batches: [6, 92, 62]  # test batches for the presentation, picked from metadata only:
                            # 6 normal recipe, 92 fault 80-160 h (recipe, same length as 6), 62 normal APC
