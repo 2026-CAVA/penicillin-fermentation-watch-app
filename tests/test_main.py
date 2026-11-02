@@ -10,7 +10,7 @@ from main import __main__ as pipeline
 from main import service
 from main.data import (ART, DATA, META, batch_meta, build_batch_table, cfg, load_split, load_ts, names,
                        offline_available, read_json)
-from main.model import load_xgb, oof_predict
+from main.model import load_xgb, oof_predict, shap_values
 from main.warning import band_flags, deviation, load_bands, resolve_ranges, risk_score, sustained, warning_metrics
 from main.whatif import response_curve, rule_whatif, rule_whatif_by_var, whatif_predict
 
@@ -224,7 +224,8 @@ def test_api_matches_mockup_contract(s):
     rows = c.get("/batches").json()
     assert len(rows) == 100 and all(set(r) == summary for r in rows)
     d = c.get(f"/batches/{bid}").json()
-    assert set(d) == summary | {"intervalH", "series"}
+    assert set(d) == summary | {"intervalH", "seriesMeta", "series"}
+    assert set(d["seriesMeta"]) == set(d["series"][0]) - {"t", "score", "state", "predictedFinal"}
     assert set(d["series"][0]) == {"t", "pH", "DO", "temperature", "feedRate", "penicillin", "score", "state",
                                    "predictedFinal"}
     assert {x["state"] for x in d["series"]} <= {"normal", "caution", "anomaly"}
@@ -238,3 +239,17 @@ def test_api_matches_mockup_contract(s):
     assert r.status_code == 200 and "delta" in r.json()
     assert c.post("/simulate", json={"batch_id": bid, "changes": {"Fs_tot": 0.05}}).status_code == 422
     assert c.get("/batches/999").status_code == 404
+
+
+def test_metadata(s):
+    from fastapi.testclient import TestClient
+    from main.api import app
+    m = TestClient(app).get("/model").json()
+    assert m["title"] == f"Plan A · XGBoost · val R² {m['val']['xgboost']['r2']:.2f}"
+    assert set(m["demo_batches"]) <= set(s["split"]["test"]) and m["target"]["unit"] == "kg"
+    v = service.batch_view(s["split"]["val"][0])
+    assert v["series"]["DO"]["unit"] == "mg/L" and v["series"]["DO"]["kind"] == "online"
+    assert v["series"]["PAA_off"]["kind"] == "offline" and v["series"]["PAA_off"]["delay_h"] == cfg()["offline_delay_h"]
+    assert all(d["label"] != d["feature"] for d in v["shap_top3"])
+    sh = shap_values(service._route(v["batch_id"])[0], s["table"].loc[[v["batch_id"]], s["q"]["features"]].astype(float))
+    assert v["shap_base"] + sh.iloc[0].drop("_base").sum() == pytest.approx(v["y_pred_kg"], rel=1e-4)

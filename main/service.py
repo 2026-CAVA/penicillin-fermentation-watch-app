@@ -4,13 +4,14 @@
     batch_view(batch_id) -> dict
     run_whatif(batch_id, changes) -> dict     changes = {"Fpaa_tot": 0.05, ...}  (relative, +5%)
     summary(batch_id), detail(batch_id), shap_top(batch_id) -> FermentIQ mockup shapes (served by main.api)
+    model_info() -> dict                      model, target, val metrics, alarm rule, demo batches
 """
 from functools import cache
 
 import numpy as np
 import pandas as pd
 
-from main.data import ART, DATA, DT, cfg, load_split, load_ts, offline_available, read_json
+from main.data import ART, DATA, DT, cfg, col_meta, feature_label, load_split, load_ts, offline_available, read_json
 from main.model import load_xgb, shap_values, top_k_drivers
 from main.warning import GRADES, band_at, deviation, load_bands, risk_contrib
 from main.whatif import response_curve, rule_whatif, rule_whatif_by_var, whatif_predict
@@ -47,6 +48,22 @@ def _route(batch_id):
     return s["final"], s["bands"]["full"], "final"
 
 
+def target():
+    t_cut = _state()["split"]["t_cut"]
+    return {"name": "Total penicillin yield", "unit": "kg", "predicted_at_h": t_cut,
+            "text": f"Total penicillin yield at batch end (kg), predicted from data up to {t_cut:g} h"}
+
+
+def _meta(v):
+    """label, unit, kind of a series; offline values are null until delay_h after the first sample."""
+    m = col_meta(v)
+    return m | ({"delay_h": cfg()["offline_delay_h"]} if m["kind"] == "offline" else {})
+
+
+def _drivers(shap_row, x_row, k=3):
+    return [{**d, "label": feature_label(d["feature"])} for d in top_k_drivers(shap_row, x_row, k)]
+
+
 def _lst(a):
     return [float(v) if np.isfinite(v) else None for v in np.asarray(a, float)]
 
@@ -64,12 +81,13 @@ def batch_view(batch_id):
     rk = s["risk"][s["risk"].batch == batch_id].reset_index(drop=True)
     x = s["X"].loc[batch_id]
     xf = x.to_frame().T.astype(float)
+    sh = shap_values(model, xf).iloc[0]
 
     mu, sd = band_at(ts, band)
     w, bvars = float(band["width"]), band["vars"].tolist()
     series = {}
     for v in dict.fromkeys([*bvars, *ranges, *NOTES]):
-        e = {"values": _lst(ts[v]), "note": NOTES.get(v)}
+        e = {"values": _lst(ts[v]), "note": NOTES.get(v), **_meta(v)}
         if v in bvars:
             j = bvars.index(v)
             e |= {"band_mean": _lst(mu[:, j]), "band_lo": _lst(mu[:, j] - w * sd[:, j]),
@@ -83,13 +101,13 @@ def batch_view(batch_id):
     leaf = s["rules"]["leaf"][str(batch_id)]
     return {
         "batch_id": int(batch_id), "group": row.group, "is_fault": bool(row.is_fault), "split": row.split,
-        "tag": TAGS[row.split], "pred_source": source, "t_cut": s["split"]["t_cut"],
+        "tag": TAGS[row.split], "pred_source": source, "t_cut": s["split"]["t_cut"], "target": target(),
         "light_final": rk.grade.iloc[-1], "light_worst": max(rk.grade, key=list(GRADES).index),
         "y_pred_kg": float(model.predict(xf)[0]), "y_true_kg": float(row.y),
         "t": ts.t.tolist(), "series": series,
         "risk": {"R": _lst(rk.R), "grade": rk.grade.tolist(), "band_alarm": rk.band_alarm.astype(bool).tolist(),
                  "cuts": cuts, "alarm_top3": causes},
-        "shap_top3": top_k_drivers(shap_values(model, xf).iloc[0], x),
+        "shap_top3": _drivers(sh, x), "shap_base": float(sh["_base"]),
         "rule": {**next(r for r in s["rules"]["rules"] if r["leaf"] == leaf), "tree_r2": s["rules"]["r2"],
                  "reference_only": s["rules"]["reference_only"]},
         "whatif": {
@@ -112,7 +130,8 @@ def run_whatif(batch_id, changes):
     if unknown:
         raise ValueError(f"not a slider feature: {sorted(unknown)}")
     model, _, source = _route(batch_id)
-    return {"pred_source": source, **whatif_predict(model, _state()["X"].loc[batch_id], changes, _state()["bounds"])}
+    r = whatif_predict(model, _state()["X"].loc[batch_id], changes, _state()["bounds"])
+    return {"pred_source": source, **r, "top3": [{**d, "label": feature_label(d["feature"])} for d in r["top3"]]}
 
 
 # --- FermentIQ mockup contract (GET /batches, /batches/{id}, /batches/{id}/shap) ------------------
@@ -154,11 +173,28 @@ def detail(batch_id):
                          "state": rk.grade.map(STATE),
                          "predictedFinal": np.where(ts.t >= s["split"]["t_cut"], _y_pred(batch_id), np.nan)})
     rows = rows.astype(object).where(rows.notna(), None)
-    return {**summary(batch_id), "intervalH": DT, "series": rows.to_dict("records")}
+    meta = {k: {"column": c, **_meta(c)} for k, c in SERIES.items()}
+    return {**summary(batch_id), "intervalH": DT, "seriesMeta": meta, "series": rows.to_dict("records")}
 
 
 def shap_top(batch_id, k=5):
     """Yield SHAP (one per batch, not per time point), largest |value| first."""
     model, _, _ = _route(batch_id)
     sh = shap_values(model, _state()["X"].loc[[batch_id]].astype(float)).iloc[0].drop("_base")
-    return [{"feature": f, "label": f, "value": float(sh[f])} for f in sh.abs().sort_values(ascending=False).index[:k]]
+    return [{"feature": f, "label": feature_label(f), "value": float(sh[f])}
+            for f in sh.abs().sort_values(ascending=False).index[:k]]
+
+
+def model_info():
+    """Header line and the numbers behind it (validation set only; the test set is evaluated once, separately)."""
+    s = _state()
+    q, th, r = read_json(ART / "quality.json"), s["th"], s["rules"]
+    v = q["val"]["xgboost"]
+    return {"title": f"Plan A · XGBoost · val R² {v['r2']:.2f}", "plan": "Plan A", "model": "XGBoost",
+            "target": target(), "n_features": len(q["features"]), "n_train": len(s["split"]["train"]),
+            "n_val": len(s["split"]["val"]), "val": q["val"], "val_ci95": q["val_ci95"], "val_pass": q["val_pass"],
+            "val_r2_by_group": q["val_r2_by_group"], "val_r2_by_cutoff": q["val_r2_by_cutoff"],
+            "alarm": {"cuts": th["cuts"], "persist_points": th["persist"], "persist_h": th["persist"] * DT,
+                      "band_rule": th["band_rule"], "val_false_alarms": th["val_far"]},
+            "rule_tree": {"r2": r["r2"], "reference_only": r["reference_only"]},
+            "sliders": list(s["bounds"]), "demo_batches": cfg()["demo_batches"]}

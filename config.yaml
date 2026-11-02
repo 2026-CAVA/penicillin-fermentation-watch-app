@@ -6,40 +6,41 @@ paths:
 
 # Columns of 100_Batches_IndPenSim_V3.csv in file order; `src` = raw header name (header repaired on load,
 # see data.read_header). Raman spectra (positions 37+) are not loaded.
+# label: display name (English, shown in the UI)
 # role: time | input | display (shown, never a model/R(t) input) | forbidden | meta
 # kind: online (every 0.2 h) | offline (every 12 h, available offline_delay_h after sampling)
 columns:
-  - {name: t,         src: "Time (h)",                                    role: time,      unit: h}
-  - {name: Fg,        src: "Aeration rate(Fg:L/h)",                       role: input,     kind: online, unit: L/h}
-  - {name: RPM,       src: "Agitator RPM(RPM:RPM)",                       role: display,   kind: online, unit: rpm}   # fixed 100 rpm
-  - {name: Fs,        src: "Sugar feed rate(Fs:L/h)",                     role: input,     kind: online, unit: L/h}
-  - {name: Fa,        src: "Acid flow rate(Fa:L/h)",                      role: input,     kind: online, unit: L/h}
-  - {name: Fb,        src: "Base flow rate(Fb:L/h)",                      role: input,     kind: online, unit: L/h}
-  - {name: Fc,        src: "Heating/cooling water flow rate(Fc:L/h)",     role: input,     kind: online, unit: L/h}
-  - {name: Fh,        src: "Heating water flow rate(Fh:L/h)",             role: input,     kind: online, unit: L/h}
-  - {name: Fw,        src: "Water for injection/dilution(Fw:L/h)",        role: input,     kind: online, unit: L/h}
-  - {name: pressure,  src: "Air head pressure(pressure:bar)",             role: input,     kind: online, unit: bar}
-  - {name: Fremoved,  src: "Dumped broth flow(Fremoved:L/h)",             role: input,     kind: online, unit: L/h}   # logged as negative flow
-  - {name: S,         src: "Substrate concentration(S:g/L)",              role: display,   kind: online, unit: g/L}   # not measurable online in a real plant
-  - {name: DO,        src: "Dissolved oxygen concentration(DO2:mg/L)",    role: input,     kind: online, unit: mg/L}
-  - {name: P,         src: "Penicillin concentration(P:g/L)",             role: forbidden, kind: online, unit: g/L}   # target construction only
-  - {name: V,         src: "Vessel Volume(V:L)",                          role: input,     kind: online, unit: L}
-  - {name: Wt,        src: "Vessel Weight(Wt:Kg)",                        role: input,     kind: online, unit: kg}
-  - {name: pH,        src: "pH(pH:pH)",                                   role: input,     kind: online, unit: pH}
-  - {name: T,         src: "Temperature(T:K)",                            role: input,     kind: online, unit: K}
-  - {name: Q,         src: "Generated heat(Q:kJ)",                        role: input,     kind: online, unit: kJ}
-  - {name: CO2outgas, src: "carbon dioxide percent in off-gas(CO2outgas:%)", role: input,  kind: online, unit: "%"}
-  - {name: Fpaa,      src: "PAA flow(Fpaa:PAA flow (L/h))",               role: input,     kind: online, unit: L/h}
-  - {name: PAA_off,   src: "PAA concentration offline(PAA_offline:PAA (g L^{-1}))", role: input, kind: offline, unit: mg/L}  # header says g/L, values are mg/L
-  - {name: Foil,      src: "Oil flow(Foil:L/hr)",                         role: input,     kind: online, unit: L/h}
-  - {name: NH3_off,   src: "NH_3 concentration off-line(NH3_offline:NH3 (g L^{-1}))", role: input, kind: offline, unit: mg/L}  # header says g/L, values are mg/L
-  - {name: OUR,       src: "Oxygen Uptake Rate(OUR:(g min^{-1}))",        role: input,     kind: online, unit: g/min}
-  - {name: O2,        src: "Oxygen in percent in off-gas(O2:O2  (%))",    role: input,     kind: online, unit: "%"}
-  - {name: P_off,     src: "Offline Penicillin concentration(P_offline:P(g L^{-1}))", role: input, kind: offline, unit: g/L}
-  - {name: X_off,     src: "Offline Biomass concentratio(X_offline:X(g L^{-1}))", role: input, kind: offline, unit: g/L}
-  - {name: CER,       src: "Carbon evolution rate(CER:g/h)",              role: input,     kind: online, unit: g/h}
-  - {name: NH3_shots, src: "Ammonia shots(NH3_shots:kgs)",                role: input,     kind: online, unit: kg}
-  - {name: Visc_off,  src: "Viscosity(Viscosity_offline:centPoise)",      role: input,     kind: offline, unit: cP}
+  - {name: t,         src: "Time (h)", label: "Time",                                    role: time,      unit: h}
+  - {name: Fg,        src: "Aeration rate(Fg:L/h)", label: "Aeration rate",                       role: input,     kind: online, unit: L/h}
+  - {name: RPM,       src: "Agitator RPM(RPM:RPM)", label: "Agitator speed",                       role: display,   kind: online, unit: rpm}   # fixed 100 rpm
+  - {name: Fs,        src: "Sugar feed rate(Fs:L/h)", label: "Sugar feed rate",                     role: input,     kind: online, unit: L/h}
+  - {name: Fa,        src: "Acid flow rate(Fa:L/h)", label: "Acid flow rate",                      role: input,     kind: online, unit: L/h}
+  - {name: Fb,        src: "Base flow rate(Fb:L/h)", label: "Base flow rate",                      role: input,     kind: online, unit: L/h}
+  - {name: Fc,        src: "Heating/cooling water flow rate(Fc:L/h)", label: "Cooling water flow rate",     role: input,     kind: online, unit: L/h}
+  - {name: Fh,        src: "Heating water flow rate(Fh:L/h)", label: "Heating water flow rate",             role: input,     kind: online, unit: L/h}
+  - {name: Fw,        src: "Water for injection/dilution(Fw:L/h)", label: "Water for injection",        role: input,     kind: online, unit: L/h}
+  - {name: pressure,  src: "Air head pressure(pressure:bar)", label: "Head pressure",             role: input,     kind: online, unit: bar}
+  - {name: Fremoved,  src: "Dumped broth flow(Fremoved:L/h)", label: "Dumped broth flow",             role: input,     kind: online, unit: L/h}   # logged as negative flow
+  - {name: S,         src: "Substrate concentration(S:g/L)", label: "Substrate concentration",              role: display,   kind: online, unit: g/L}   # not measurable online in a real plant
+  - {name: DO,        src: "Dissolved oxygen concentration(DO2:mg/L)", label: "Dissolved oxygen",    role: input,     kind: online, unit: mg/L}
+  - {name: P,         src: "Penicillin concentration(P:g/L)", label: "Penicillin concentration",             role: forbidden, kind: online, unit: g/L}   # target construction only
+  - {name: V,         src: "Vessel Volume(V:L)", label: "Vessel volume",                          role: input,     kind: online, unit: L}
+  - {name: Wt,        src: "Vessel Weight(Wt:Kg)", label: "Vessel weight",                        role: input,     kind: online, unit: kg}
+  - {name: pH,        src: "pH(pH:pH)", label: "pH",                                   role: input,     kind: online, unit: pH}
+  - {name: T,         src: "Temperature(T:K)", label: "Temperature",                            role: input,     kind: online, unit: K}
+  - {name: Q,         src: "Generated heat(Q:kJ)", label: "Generated heat",                        role: input,     kind: online, unit: kJ}
+  - {name: CO2outgas, src: "carbon dioxide percent in off-gas(CO2outgas:%)", label: "CO2 in off-gas", role: input,  kind: online, unit: "%"}
+  - {name: Fpaa,      src: "PAA flow(Fpaa:PAA flow (L/h))", label: "PAA feed rate",               role: input,     kind: online, unit: L/h}
+  - {name: PAA_off,   src: "PAA concentration offline(PAA_offline:PAA (g L^{-1}))", label: "PAA concentration (offline)", role: input, kind: offline, unit: mg/L}  # header says g/L, values are mg/L
+  - {name: Foil,      src: "Oil flow(Foil:L/hr)", label: "Oil feed rate",                         role: input,     kind: online, unit: L/h}
+  - {name: NH3_off,   src: "NH_3 concentration off-line(NH3_offline:NH3 (g L^{-1}))", label: "NH3 concentration (offline)", role: input, kind: offline, unit: mg/L}  # header says g/L, values are mg/L
+  - {name: OUR,       src: "Oxygen Uptake Rate(OUR:(g min^{-1}))", label: "Oxygen uptake rate",        role: input,     kind: online, unit: g/min}
+  - {name: O2,        src: "Oxygen in percent in off-gas(O2:O2  (%))", label: "O2 in off-gas",    role: input,     kind: online, unit: "%"}
+  - {name: P_off,     src: "Offline Penicillin concentration(P_offline:P(g L^{-1}))", label: "Penicillin concentration (offline)", role: input, kind: offline, unit: g/L}
+  - {name: X_off,     src: "Offline Biomass concentratio(X_offline:X(g L^{-1}))", label: "Biomass concentration (offline)", role: input, kind: offline, unit: g/L}
+  - {name: CER,       src: "Carbon evolution rate(CER:g/h)", label: "CO2 evolution rate",              role: input,     kind: online, unit: g/h}
+  - {name: NH3_shots, src: "Ammonia shots(NH3_shots:kgs)", label: "Ammonia shots",                role: input,     kind: online, unit: kg}
+  - {name: Visc_off,  src: "Viscosity(Viscosity_offline:centPoise)", label: "Viscosity (offline)",      role: input,     kind: offline, unit: cP}
   - {name: fault_ref,  src: "Fault reference(Fault_ref:Fault ref)", role: forbidden}   # 1 while a fault is active
   - {name: ctrl,       src: "0 - Recipe driven 1 - Operator controlled(Control_ref:Control ref)", role: meta}
   - {name: pat,        src: "1- No Raman spec, 1-Raman spec recorded,2-PAT control(PAT_ref:PAT ref)", role: meta}  # 2 = Raman-based PAT (APC) control
@@ -123,4 +124,5 @@ xgb:
 tree: {max_depth: [1, 2, 3], min_samples_leaf: [5, 10, 15, 20]}   # chosen by train fold-OOF r2
 dummy: {n_dummy: 3, n_seeds: 10, flag_frac: 0.7}
 
-demo_batches: []          # test batches for the presentation; must be set before `python -m main test`
+demo_batches: [6, 92, 62]  # test batches for the presentation, picked from metadata only:
+                           # 6 normal recipe, 92 fault 80-160 h (recipe, same length as 6), 62 normal APC

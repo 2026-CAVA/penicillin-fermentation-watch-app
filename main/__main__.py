@@ -174,10 +174,6 @@ def run_quality():
     _, folds = oof_predict(X.loc[tr], y.loc[tr], params, table.fold.loc[tr], c["seed"])
     for k, m in folds.items():
         m.save_model(ART / f"xgb_fold{k}.json")
-    write_json(ART / "quality.json", {
-        "features": feats, "params": params, "t_cut": split["t_cut"],
-        "cv_rmse": {"fixed": fixed_rmse, "chosen": cv}})
-
     val = {"xgboost": metrics(y.loc[va], model.predict(X.loc[va]))}
     for k, m in baselines(X.loc[tr], y.loc[tr]).items():
         val[f"baseline_{k}"] = metrics(y.loc[va], m.predict(X.loc[va]))
@@ -195,6 +191,11 @@ def run_quality():
 
     pv = pd.DataFrame({"group": table.group.loc[va], "y": y.loc[va], "y_pred": model.predict(X.loc[va])})
     by_group = {g: metrics(d.y, d.y_pred)["r2"] for g, d in pv.groupby("group")}
+    write_json(ART / "quality.json", {
+        "features": feats, "params": params, "t_cut": split["t_cut"],
+        "cv_rmse": {"fixed": fixed_rmse, "chosen": cv},
+        "val": val, "val_pass": passed, "val_r2_by_group": by_group, "val_r2_by_cutoff": curve,
+        "val_ci95": bootstrap_ci(y.loc[va], model.predict(X.loc[va]), seed=c["seed"])})  # 15 batches: wide
 
     print(f"val ({len(va)} batches)  " + "".join(f"{h:>7}" for h in ("rmse", "mae", "mape", "r2")))
     for name, m in val.items():

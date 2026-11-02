@@ -4,6 +4,7 @@
     GET  /batches/{id}             summary + per-time-point series
     GET  /batches/{id}/shap?t=     yield SHAP top 5 (t is accepted but not used yet: one SHAP per batch)
     POST /simulate                 {"batch_id": 92, "changes": {"Fpaa_tot": 0.05}} -> run_whatif
+    GET  /model                    model, target, validation metrics, alarm rule, demo batches
 """
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -35,6 +36,11 @@ def batch(batch_id: int):
 def shap(batch_id: int, t: float | None = None):
     _known(batch_id)
     return service.shap_top(batch_id)
+
+
+@app.get("/model")
+def model():
+    return service.model_info()
 
 
 class Simulate(BaseModel):

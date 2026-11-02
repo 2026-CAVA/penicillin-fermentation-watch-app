@@ -27,6 +27,33 @@ def names(role, kind=None):
     return [c["name"] for c in cfg()["columns"] if c["role"] == role and (kind is None or c.get("kind") == kind)]
 
 
+def col_meta(name):
+    """{label, unit, kind} of a raw column (kind: online | offline | None)."""
+    c = next(c for c in cfg()["columns"] if c["name"] == name)
+    return {"label": c.get("label", name), "unit": c.get("unit"), "kind": c.get("kind")}
+
+
+FIXED_LABELS = {"R_mean": "Mean risk score R(t) up to t_cut", "R_max": "Max risk score R(t) up to t_cut",
+                "n_critical": "CRITICAL points up to t_cut", "n_band": "Band excursion points up to t_cut",
+                "ctrl_operator": "Operator-controlled batch (0/1)", "ctrl_apc": "APC-controlled batch (0/1)"}
+
+
+def feature_label(f):
+    """Display name with unit for a batch-table feature, e.g. DO_min -> 'First-half min Dissolved oxygen (mg/L)'."""
+    if f in FIXED_LABELS:
+        return FIXED_LABELS[f]
+    for suffix, text in (("_min_t", "Hour of minimum {} (h)"), ("_mean", "First-half mean {} ({})"),
+                         ("_min", "First-half min {} ({})"), ("_last", "{} at t_cut ({})"),
+                         ("_tot", "First-half total {} ({})"),
+                         ("_slope", f"{{}} trend, last {cfg()['features']['slope_h']} h ({{}}/h)")):
+        if f.endswith(suffix):
+            m = col_meta(f[: -len(suffix)])
+            if suffix == "_tot":  # flow L/h x h = L
+                return text.format(m["label"].removesuffix(" rate"), m["unit"].removesuffix("/h"))
+            return text.format(m["label"], m["unit"])
+    return f
+
+
 def read_json(path):
     return json.loads(Path(path).read_text(encoding="utf-8"))
 
