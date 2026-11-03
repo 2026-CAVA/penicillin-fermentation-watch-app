@@ -9,11 +9,12 @@ import time
 
 import numpy as np
 import pandas as pd
+from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.compose import ColumnTransformer
 from sklearn.linear_model import RidgeCV
 from sklearn.model_selection import StratifiedKFold
 from sklearn.pipeline import make_pipeline
-from sklearn.preprocessing import SplineTransformer
+from sklearn.preprocessing import SplineTransformer, StandardScaler
 
 from main import forecast as fc
 from main.data import (ART, DATA, DT, batch_meta, batch_yield_kg, build_batch_table, cfg, load_ts, offline_available,
@@ -27,6 +28,24 @@ def _parts(ids, groups, n, seed):
     return [(ids[a], ids[b]) for a, b in skf.split(ids, groups)]
 
 
+class Clip(BaseEstimator, TransformerMixin):
+    """Clip each feature to its [q, 1 - q] training quantiles."""
+    def __init__(self, q=0.01):
+        self.q = q
+
+    def fit(self, X, y=None):
+        self.lo_, self.hi_ = X.quantile(self.q), X.quantile(1 - self.q)
+        return self
+
+    def transform(self, X):
+        return X.clip(self.lo_, self.hi_, axis=1)
+
+
+def fit_ridge_clip(X, y):
+    """The ridge baseline with features clipped to the training range (guards against far-out batches)."""
+    return make_pipeline(Clip(), StandardScaler(), RidgeCV(alphas=np.logspace(-2, 4, 40))).fit(X, y)
+
+
 def fit_spline(X, y, s):
     """Additive spline ridge on the top_k |corr| features of (X, y) plus the slider inputs (kept so What-if
     still moves); each feature is flat outside its training range."""
@@ -38,9 +57,10 @@ def fit_spline(X, y, s):
 
 
 def _yield(tables, y, train, ev, inner, params, seed, q_level, spline):
-    """Per cutoff: XGBoost, spline ridge and baselines fit on train, predictions for ev, 80% range (inner OOF
-    |error|) and model spread (inner fold models) for XGBoost and spline ridge."""
-    fits = {"xgboost": lambda X, y: make_xgb(params, seed).fit(X, y), "spline": lambda X, y: fit_spline(X, y, spline)}
+    """Per cutoff: XGBoost, spline ridge, clipped ridge and baselines fit on train, predictions for ev, 80% range
+    (inner OOF |error|) and model spread (inner fold models) for the first three."""
+    fits = {"xgboost": lambda X, y: make_xgb(params, seed).fit(X, y), "spline": lambda X, y: fit_spline(X, y, spline),
+            "ridge_clip": fit_ridge_clip}
     rows = []
     for h, X in tables.items():
         Xt, yt = X.loc[train], y.loc[train]
