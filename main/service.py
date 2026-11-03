@@ -17,9 +17,9 @@ from functools import cache
 import numpy as np
 import pandas as pd
 
-from main import forecast as fc
 from main.data import ART, DATA, DT, cfg, col_meta, feature_label, load_split, load_ts, offline_available, read_json
 from main.model import load_xgb, shap_values, top_k_drivers
+from main.predict import forecast_path
 from main.warning import GRADES, band_at, deviation, load_bands, range_sign, risk_contrib, runs
 from main.whatif import optimize as optimize_sliders
 from main.whatif import response_curve, rule_whatif, rule_whatif_by_var, whatif_predict
@@ -442,17 +442,12 @@ def forecast(batch_id, t):
     ts = s["ts"][(s["ts"].batch == batch_id) & (s["ts"].t <= t + 1e-9)]
     if ts.empty:
         raise ValueError(f"t = {t} is before the first time point")
-    row = fc.frame(ts).iloc[[-1]]
-    R = pd.concat([row.assign(h=h) for h in meta["horizons"]], ignore_index=True)
     r = s["table"].loc[batch_id]
-    model = folds[int(r.fold)] if r.split == "train" else final
-    p = fc.predict(model, R, meta["features"])
-    now, half = float(row.t.iloc[0]), meta["halfwidth"]
-    return {"t": now, "unit": "g/L", "label": "Penicillin concentration",
+    row, path = forecast_path(ts, folds[int(r.fold)] if r.split == "train" else final, meta)
+    return {"t": float(row.t.iloc[0]), "unit": "g/L", "label": "Penicillin concentration",
             "last_measured": {"value": None if pd.isna(row.P_off.iloc[0]) else float(row.P_off.iloc[0]),
                               "age_h": None if pd.isna(row.P_off_age_h.iloc[0]) else float(row.P_off_age_h.iloc[0])},
-            "path": [{"t": round(now + h, 4), "h": h, "p": float(v), "lo": float(v - half[f"{h:g}"]),
-                      "hi": float(v + half[f"{h:g}"])} for h, v in zip(meta["horizons"], p)],
+            "path": path,
             "note": "80% range from out-of-fold errors on train batches; offline P arrives 4 h after sampling."}
 
 

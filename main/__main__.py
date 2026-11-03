@@ -1,14 +1,19 @@
 """Pipeline CLI: python -m main {prepare,check,warning,quality,cutoffs,forecast,explain,test,cv,serve,all} ...
 
-all = prepare warning quality cutoffs forecast explain. `test` (one-time test-set evaluation) and `check` run only on request.
+all = prepare warning quality cutoffs forecast explain cv. `check` runs only on request; `test` (the one-time
+evaluation of the old fixed split) is retired.
 serve = HTTP API (main.api) on http://127.0.0.1:8000, reads the files the steps wrote.
 cv = repeated cross-validation of the whole pipeline over every normal batch (main.cv, several minutes).
+predict = python -m main predict run.csv [--control recipe|operator|apc] [--t H] [--out result.json]:
+          a new run (not in the data) through the frozen models (main.predict).
 Each step reads the previous step's files in data/cache/ and artifacts/ and prints its results.
 """
 import argparse
+import json
 import sys
 from datetime import datetime
 
+import joblib
 import numpy as np
 import pandas as pd
 
@@ -196,6 +201,7 @@ def run_cutoffs():
         fit = fit_ridge_clip if name == "ridge_clip" else (lambda X, y: make_xgb(params, c["seed"]).fit(X, y))
         cv = repeated_cv(X.loc[tr], y.loc[tr], params, c["seed"], fit=fit)
         final = fit(X.loc[tr], y.loc[tr])
+        joblib.dump(final, ART / f"cutoff_{h:g}.joblib")  # for `predict` on runs outside the data
         oof, folds = oof_predict(X.loc[tr], y.loc[tr], params, table.fold.loc[tr], c["seed"], fit=fit)
         p = pd.DataFrame({f"fold{k}": m.predict(X) for k, m in folds.items()}, index=X.index)
         p["y_pred"] = final.predict(X)
@@ -433,7 +439,28 @@ STEPS = {"prepare": run_prepare, "check": run_check, "warning": run_warning, "qu
          "cv": run_cv, "serve": run_serve}
 ALL = ["prepare", "warning", "quality", "cutoffs", "forecast", "explain", "cv"]
 
+def run_predict(argv):
+    from main.predict import GROUPS, predict, report
+    ap = argparse.ArgumentParser(prog="python -m main predict", description="Predict for a new run (no training).")
+    ap.add_argument("csv", help="one run from t = 0: column names as in config.yaml (t + every input column)")
+    ap.add_argument("--control", choices=GROUPS, default="recipe", help="how the run is controlled")
+    ap.add_argument("--t", type=float, help="use rows up to this hour only (default: every row)")
+    ap.add_argument("--out", help="also write the full result as JSON here")
+    a = ap.parse_args(argv)
+    try:
+        r = predict(a.csv, a.control, a.t)
+    except ValueError as e:
+        sys.exit(f"error: {e}")
+    print(report(r))
+    if a.out:
+        with open(a.out, "w", encoding="utf-8") as f:
+            json.dump(r, f, indent=2, ensure_ascii=False)
+
+
 if __name__ == "__main__":
+    if sys.argv[1:2] == ["predict"]:
+        run_predict(sys.argv[2:])
+        sys.exit()
     ap = argparse.ArgumentParser(prog="python -m main", description=__doc__.splitlines()[0])
     ap.add_argument("steps", nargs="+", choices=[*STEPS, "all"])
     for s in ap.parse_args().steps:

@@ -64,6 +64,7 @@ cd back
 | `check` | 데이터 점검 출력 (요청할 때만) |
 | `test` | (종료) 예전 고정 분할의 시험 세트 1회 평가. 지금 분할에는 시험용 정상 배치가 없어 실행되지 않음 |
 | `serve` | HTTP API (`http://127.0.0.1:8000`, 문서는 `/docs`) |
+| `predict` | 데이터에 없는 운전 한 건(CSV)을 학습 없이 예측 (아래 "새 데이터로 예측") |
 
 ```powershell
 .venv\Scripts\python -m main quality            # 한 단계만
@@ -82,6 +83,27 @@ R(t) cuts: WARNING >= 28, CRITICAL >= 68, held 5 points (60 min); band rule: off
   115 h       560    19   0.498   0.476      742  yes       xgboost
 alarm warning+  normal batches alarmed 10% (7%-13%), faults detected 78% (74%-80%), delay after onset 4.5 (3.3-7.2) h, cuts [23, 84]
 ```
+
+### 새 데이터로 예측 (`predict`)
+
+데이터에 없는 운전 한 건을 CSV로 넣으면, 학습 없이 저장된 모델로 지금 시각 기준 결과를 냅니다.
+
+```powershell
+.venv\Scripts\python -m main predict run.csv --control apc --t 100 --out result.json
+```
+
+- **입력:** t = 0부터 지금까지 한 운전의 시계열 CSV입니다. 열 이름은 `config.yaml`의 `columns` 이름(`t`, `Fg`, `Fs`, `DO`, `pH`, `T`, …, 오프라인 `P_off`·`PAA_off`·`NH3_off`·`X_off`·`Visc_off`)을 씁니다. 오프라인 열은 측정하지 않은 행을 비워 둡니다. 행 간격은 0.2 h입니다. 그 밖의 열(P, fault_ref 등)은 읽지 않습니다.
+- **옵션:** `--control`은 제어 방식(`recipe` 기본, `operator`, `apc`)입니다. `--t`를 주면 그 시각까지만 씁니다. `--out`을 주면 전체 결과를 JSON으로도 저장합니다.
+- **출력:**
+  - 지금 경보 등급과 R(t), 그 원인 변수
+  - 지금까지 가장 나빴던 등급과 첫 경보 시각
+  - 도달한 마지막 컷오프의 예상 수율, 80 % 범위, 기여도 상위 5개(46 h 전에는 없음)
+  - 8 h 앞 페니실린 농도 경로
+- **예시 입력 만들기:** 있는 배치를 잘라 쓰거나 값을 바꿔 가상 상황을 만들 수 있습니다.
+  ```powershell
+  .venv\Scripts\python -c "from main.data import load_ts; d = load_ts(); d[(d.batch == 92) & (d.t <= 100)].to_csv('run.csv', index=False)"
+  ```
+- **주의:** 정상 배치 1~90은 최종 모델이 학습에 쓴 배치라, 이 명령으로 넣으면 실제보다 잘 맞습니다. 그 배치의 공정한 예측은 API(`pred_source: "oof"`)를 보면 됩니다.
 
 ## 테스트
 

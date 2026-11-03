@@ -469,3 +469,33 @@ def test_cv_parts(s):
     for train, ev in parts:
         assert not set(train) & set(ev) and len(train) + len(ev) == len(normal)
         assert set(meta.group[ev].value_counts()) == {6}  # 30 per group / 5 parts
+
+
+@pytest.mark.parametrize("t0", [40.0, 100.0, None])
+def test_predict_new_run_matches_service(s, t0, tmp_path):
+    """A batch the models never saw (fault 92), given as a plain CSV, gets the same alarm grades, yield
+    predictions and forecast as the service shows for it; extra columns (P, fault_ref) are ignored."""
+    from main.predict import predict
+    ts = s["ts"][s["ts"].batch == 92]
+    ts = ts if t0 is None else ts[ts.t <= t0]
+    path = tmp_path / "run.csv"
+    ts.assign(batch=7, fault_ref=1, P=ts.P * 0 + 1e6).to_csv(path, index=False)
+    group = s["table"].group[92]
+    r = predict(str(path), group)
+    rk = s["risk"][(s["risk"].batch == 92) & (s["risk"].t <= ts.t.max() + 1e-9)]
+    assert r["alarm"]["grade"] == rk.grade.iloc[-1] and r["alarm"]["R"] == pytest.approx(rk.R.iloc[-1])
+    assert r["alarm"]["worst"] == max(rk.grade, key=["STABLE", "WARNING", "CRITICAL"].index)
+    trend = service.pred_trend(92, t0)
+    assert [p["t_cut"] for p in r["yield_trend"]] == [p["t_cut"] for p in trend]
+    for a, b in zip(r["yield_trend"], trend):
+        assert a["y_pred"] == pytest.approx(b["y_pred"], rel=1e-5) and a["y_pred_hi"] == pytest.approx(b["y_pred_hi"], rel=1e-5)
+    if trend:
+        y = r["yield"]
+        assert y["base"] + sum(d["value"] for d in predict(str(path), group, k=999)["yield"]["contrib"]) == \
+            pytest.approx(y["y_pred"], rel=1e-4)
+    else:
+        assert r["yield"] is None
+    f = service.forecast(92, float(ts.t.max()))
+    assert [p["p"] for p in r["forecast"]["path"]] == pytest.approx([p["p"] for p in f["path"]], rel=1e-5)
+    with pytest.raises(ValueError, match="missing columns"):
+        predict(ts.drop(columns="DO"), group)
