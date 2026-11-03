@@ -105,7 +105,7 @@ def test_test_step_is_frozen():
 
 def test_display_source(s):
     sp = s["split"]
-    for bid, src in [(sp["train"][0], "oof"), (sp["val"][0], "final"), (sp["test"][0], "final")]:
+    for bid, src in [(sp["train"][0], "oof"), (sp["test"][0], "final")]:
         v = service.batch_view(bid)
         assert v["pred_source"] == src and v["tag"]
         json.dumps(v)  # JSON-safe for the front end
@@ -114,7 +114,7 @@ def test_display_source(s):
 
 def test_whatif_zero_change_and_bounds(s):
     st = service._state()
-    bid = s["split"]["val"][0]
+    bid = s["split"]["test"][0]  # a fault batch: predicted by the final model
     x = st["X"].loc[bid]
     r0 = whatif_predict(st["final"], x, {f: 0.0 for f in st["bounds"]}, st["bounds"])
     assert r0["delta"] == 0 and r0["y_pred_before"] == pytest.approx(service.batch_view(bid)["y_pred_kg"])
@@ -129,7 +129,7 @@ def test_sliders_move(s):
     assert service.slider_bounds(pd.DataFrame({"a": [1, 1], "b": [1, 2]}), ["a", "b"]) == {"b": (1.0, 2.0)}
     assert set(st["bounds"]) == set(cfg()["sliders"])
     for f in st["bounds"]:
-        spans = [np.ptp(response_curve(st["final"], st["X"].loc[b], f, st["bounds"])["y"]) for b in s["split"]["val"]]
+        spans = [np.ptp(response_curve(st["final"], st["X"].loc[b], f, st["bounds"])["y"]) for b in s["split"]["train"][:15]]
         assert max(spans) > 0, f
 
 
@@ -173,12 +173,12 @@ def test_warning_metrics():
 
 
 def test_test_step_on_synthetic_batches(s, tmp_path, monkeypatch, capsys):
-    """Run the test step end to end without touching the real test set: val normal batches play the
-    test normals, and copies of val batches with a fault window from 50 h play the fault batches."""
+    """Run the (retired, one-time) test step end to end without touching the real results: train normal batches
+    play the test normals, and copies of train batches with a fault window from 50 h play the fault batches."""
     import main.data as data_mod
     sp, risk, table, ts = s["split"], s["risk"], s["table"].copy(), s["ts"]  # do not touch the shared fixture
     cp = pd.read_parquet(DATA / "cutoff_preds.parquet")
-    normals, sources = sp["val"][:5], sp["val"][5:8]
+    normals, sources = sp["train"][:5], sp["train"][5:8]
     fakes = {900 + i: b for i, b in enumerate(sources, start=1)}
     for fake, src in fakes.items():
         r = risk[risk.batch == src].assign(batch=fake)
@@ -220,15 +220,15 @@ def test_test_step_on_synthetic_batches(s, tmp_path, monkeypatch, capsys):
 
 def test_rule_tree_beats_mean_or_is_marked():
     r = read_json(ART / "rules.json")
-    assert r["r2"]["val"] > 0 or r["reference_only"]
-    assert r["reference_only"] == (not r["r2"]["val"] > 0)
+    score = r["r2"].get("val", r["r2"]["train_cv"])  # no val set: fold-OOF r2
+    assert r["reference_only"] == (not score > 0)
 
 
 def test_api_matches_mockup_contract(s):
     """Key sets of the FermentIQ mockup (BatchSummary, series rows, SHAP items); scoreCuts is our addition."""
     from fastapi.testclient import TestClient
     from main.api import app
-    c, bid = TestClient(app), s["split"]["val"][0]
+    c, bid = TestClient(app), s["split"]["train"][0]
     summary = {"id", "runStatus", "elapsedH", "plannedEndH", "state", "predictedFinal", "predictedRange", "latestScore",
                "finalMeasured", "firstAnomalyH", "anomalyDurationH", "segments", "scoreCuts"}
     rows = c.get("/batches").json()
@@ -243,7 +243,7 @@ def test_api_matches_mockup_contract(s):
     assert seg[0]["start"] == d["series"][0]["t"] and all(a["end"] == b["start"] for a, b in zip(seg, seg[1:]))
     first = _first_provided()
     assert all((x["predictedFinal"] is None) == (x["t"] < first) for x in d["series"])
-    assert c.get(f"/batches/{bid}/shap?t=50").json() == []  # no yield prediction before t_cut
+    assert c.get(f"/batches/{bid}/shap?t={_first_provided() - 1:g}").json() == []  # no yield prediction yet
     sh = c.get(f"/batches/{bid}/shap?t=150").json()
     assert len(sh) == 5 and set(sh[0]) == {"feature", "label", "value"}
     r = c.post("/simulate", json={"batch_id": bid, "changes": {"Fpaa_tot": 0.05}})
@@ -256,9 +256,10 @@ def test_metadata(s):
     from fastapi.testclient import TestClient
     from main.api import app
     m = TestClient(app).get("/model").json()
-    assert m["title"] == f"Plan A · XGBoost · val R² {m['val']['xgboost']['r2']:.2f}"
-    assert set(m["demo_batches"]) <= set(s["split"]["test"]) and m["target"]["unit"] == "kg"
-    v = service.batch_view(s["split"]["val"][0])
+    t_cut = s["split"]["t_cut"]
+    assert m["title"] == f"Plan A · ridge + XGBoost · CV R² {m['cv']['yield'][f'{t_cut:g}']['r2']['mean']:.2f} at {t_cut:g} h"
+    assert set(m["cv"]["yield"]) == set(read_json(ART / "cutoffs.json")) and m["target"]["unit"] == "kg"
+    v = service.batch_view(s["split"]["train"][0])
     assert v["series"]["DO"]["unit"] == "mg/L" and v["series"]["DO"]["kind"] == "online"
     assert v["series"]["PAA_off"]["kind"] == "offline" and v["series"]["PAA_off"]["delay_h"] == cfg()["offline_delay_h"]
     assert all(d["label"] != d["feature"] for d in v["shap_top3"])
@@ -269,7 +270,7 @@ def test_metadata(s):
 def test_shap_all(s):
     from fastapi.testclient import TestClient
     from main.api import app
-    c, bid = TestClient(app), s["split"]["val"][0]
+    c, bid = TestClient(app), s["split"]["train"][0]
     allv = c.get(f"/batches/{bid}/shap?k=0").json()
     assert len(allv) == len(s["q"]["features"])
     d = c.get(f"/batches/{bid}").json()
@@ -285,7 +286,7 @@ def test_runs_and_events(s):
     assert runs([0, 1, 1, 1, -1, -1, 0, 1], 2) == [(1, 4, 1), (4, 6, -1)]
     st = service._state()
     n = st["th"]["persist"]
-    for bid in (s["split"]["val"][0], 92):
+    for bid in (s["split"]["train"][0], 92):
         ev_all, ev = service.events(bid, all=True), service.events(bid)
         assert all(e["duration_h"] >= n * 0.2 - 1e-9 and e["start"] < e["end"] for e in ev_all)
         assert ev == [e for e in ev_all if e["grade"] != "STABLE"]
@@ -360,10 +361,11 @@ def test_replay_api():
     assert r["t"] == 150 and abs(sum(x["share_pct"] for x in r["contrib"]) - 100) < 1e-6
 
 
-@pytest.mark.parametrize("h", [69.0, 161.0])
-def test_cutoff_features_no_future(s, h):
+@pytest.mark.parametrize("i", [1, -1])
+def test_cutoff_features_no_future(s, i):
     """Stored cutoff features equal features rebuilt after every value later than the cutoff is scrambled."""
     stored = pd.read_parquet(DATA / "cutoff_features.parquet")
+    h = sorted(stored.t_cut.unique())[i]
     stored = stored[stored.t_cut == h].drop(columns="t_cut").loc[[1, 2]]
     ts = s["ts"][s["ts"].batch.isin([1, 2])].copy()
     risk = s["risk"][s["risk"].batch.isin([1, 2])].copy()
@@ -381,7 +383,7 @@ def test_pred_trend(s):
     assert shown == sorted(shown)  # once provided, every later cutoff is provided too
     t_cut = s["split"]["t_cut"]
     assert all(r["model"] == ("ridge_clip" if r["t_cut"] < t_cut else "xgboost") for r in cut.values())
-    bid, t_cut = s["split"]["val"][0], s["split"]["t_cut"]
+    bid, t_cut = s["split"]["train"][0], s["split"]["t_cut"]
     trend = service.pred_trend(bid)
     first = {p["t_cut"]: p["y_pred"] for p in trend}
     assert first[t_cut] == pytest.approx(service.batch_view(bid)["y_pred_kg"], rel=1e-5)  # same model as quality
@@ -394,8 +396,7 @@ def test_pred_trend(s):
 
 def test_prediction_ranges(s):
     cut = read_json(ART / "cutoffs.json")
-    assert all(0 <= r["val_coverage_interval"] <= 1 and 0 <= r["val_coverage_spread"] <= 1 for r in cut.values())
-    for p in service.pred_trend(s["split"]["val"][0]):
+    for p in service.pred_trend(s["split"]["train"][0]):
         assert p["y_pred_lo"] < p["y_pred"] < p["y_pred_hi"] and p["spread_lo"] <= p["spread_hi"]
         half = cut[f"{p['t_cut']:g}"]["interval_halfwidth"]
         assert p["y_pred_hi"] - p["y_pred"] == pytest.approx(half, rel=1e-5)
@@ -413,9 +414,9 @@ def test_forecast_features_causal(s, t0):
 def test_forecast_api(s):
     from fastapi.testclient import TestClient
     from main.api import app
-    meta = read_json(ART / "forecast_meta.json")
-    assert meta["val_pass"]  # beats persistence and linear extrapolation at every horizon on val
-    r = TestClient(app).get(f"/batches/{s['split']['val'][0]}/forecast?t=120").json()
+    fcv = read_json(ART / "cv.json")["forecast"]  # beats persistence and linear extrapolation at every horizon
+    assert all(f["rmse"]["mean"] < min(f["rmse_persistence"]["mean"], f["rmse_linear"]["mean"]) for f in fcv.values())
+    r = TestClient(app).get(f"/batches/{s['split']['train'][0]}/forecast?t=120").json()
     assert r["t"] == 120 and len(r["path"]) == 16 and r["path"][-1]["h"] == 8
     assert all(p["lo"] < p["p"] < p["hi"] for p in r["path"])
 
@@ -423,7 +424,7 @@ def test_forecast_api(s):
 def test_optimize(s):
     from fastapi.testclient import TestClient
     from main.api import app
-    st, bid = service._state(), s["split"]["val"][0]
+    st, bid = service._state(), s["split"]["train"][0]
     r = TestClient(app).post(f"/batches/{bid}/optimize", json={}).json()
     mc = cfg()["optimize"]["max_change"]
     for f, v in r["best"].items():
@@ -433,6 +434,25 @@ def test_optimize(s):
     assert r["y_pred_best"] - r["y_pred_current"] == pytest.approx(r["gain_kg"], abs=0.01)  # float32 predictions
     assert r["note"].startswith("Reference only") and 0 <= r["models_agree"] <= r["n_models"] == 5
     assert TestClient(app).post(f"/batches/{bid}/optimize", json={"max_change": 2}).status_code == 422
+
+
+def test_early_contributions_add_up(s):
+    """Before t_cut the yield contributions are the clipped-ridge terms of the latest early cutoff:
+    base + sum = the prediction shown at that time (OOF for a train batch)."""
+    from main.model import fit_ridge_clip, linear_contribs
+    t_cut = s["split"]["t_cut"]
+    early = [r["t_cut"] for r in read_json(ART / "cutoffs.json").values() if r["provided"] and r["t_cut"] < t_cut]
+    assert early, "no early cutoff provided"
+    h = early[-1]
+    for bid in (s["split"]["train"][0], 92):
+        d = service.detail(bid, h)
+        sh = service.shap_top(bid, None, h)
+        assert d["shapBase"] + sum(x["value"] for x in sh) == pytest.approx(d["predictedFinal"], rel=1e-6)
+        assert service.batch_view(bid, h)["shap_all"][0]["feature"] == sh[0]["feature"]
+    X = pd.DataFrame({"a": [1.0, 2, 3, 4, 50], "b": [0.0, 1, 0, 1, 0]})
+    m = fit_ridge_clip(X, pd.Series([1.0, 2, 3, 4, 5]))
+    c = linear_contribs(m, X)
+    np.testing.assert_allclose(c.sum(axis=1), m.predict(X))  # base + terms = prediction (clipping included)
 
 
 def test_cv_parts(s):

@@ -17,7 +17,7 @@ from main.cv import run_cv
 from main.data import (ART, DATA, DT, assemble, batch_meta, batch_yield_kg, cfg, feature_cols, load_raw,
                        load_split, load_ts, make_split, names, offline_available, raw_path, read_json, write_json)
 from main.model import (baselines, bootstrap_ci, cross_check, dummy_check, export_rules, fit_ridge_clip, fit_rule_tree,
-                        global_importance, load_xgb, make_xgb, metrics, oof_predict, repeated_cv, search_params,
+                        global_importance, linear_contribs, load_xgb, make_xgb, metrics, oof_predict, repeated_cv, search_params,
                         select_rule_tree, shap_values)
 from main.warning import fit_warning, save_bands, warning_metrics
 
@@ -112,17 +112,18 @@ def run_warning():
     save_bands(ART / "bands.npz", bands)
     risk.to_parquet(DATA / "risk_ts.parquet")
 
+    parts = [p for p in ("train", "val") if split[p]]
     far = {part: {name: warning_metrics(risk, a, [], split[part]) for name, a in signals(risk).items()}
-           for part in ("train", "val")}
+           for part in parts}
     write_json(ART / "thresholds.json", {**rule, "ranges": ranges, "tune_on": w["tune_on"],
-                                         "val_far": far["val"], "train_far": far["train"]})
+                                         "val_far": far.get("val"), "train_far": far["train"]})
 
     (warn, crit), n, br = rule["cuts"], rule["persist"], rule["band_rule"]
     print(f"R(t) cuts: WARNING >= {warn}, CRITICAL >= {crit}, held {n} points ({n * DT * 60:.0f} min); "
           + (f"band rule: >= {br['n_vars']} vars for {br['consec']} points ({br['consec'] * DT * 60:.0f} min); "
              if br["n_vars"] <= len(c["band"]["vars"]) else "band rule: off (no setting meets the target); ")
           + f"tuned on {' + '.join(w['tune_on'])} normal batches")
-    for part in ("train", "val"):
+    for part in parts:
         nb, ww, cc = len(split[part]), far[part]["combined_warning+"], far[part]["combined_critical"]
         print(f"{part} normal false alarms: WARNING+ {ww['far_batches'] * nb:.0f}/{nb} batches, "
               f"CRITICAL {cc['far_batches'] * nb:.0f}/{nb} batches")
@@ -134,7 +135,7 @@ def signals(risk):
 
 
 def run_quality():
-    """Batch table, XGBoost (search on train CV) + fold models, baselines on val."""
+    """Batch table, XGBoost (search on train CV) + fold models, baselines on val (if any; else see `cv`)."""
     c = cfg()
     ts, split = load_ts(), load_split()
     risk = pd.read_parquet(DATA / "risk_ts.parquet")
@@ -151,6 +152,11 @@ def run_quality():
     _, folds = oof_predict(X.loc[tr], y.loc[tr], params, table.fold.loc[tr], c["seed"])
     for k, m in folds.items():
         m.save_model(ART / f"xgb_fold{k}.json")
+    out = {"features": feats, "params": params, "t_cut": split["t_cut"], "cv_rmse": {"fixed": fixed_rmse, "chosen": cv}}
+    if not va:
+        write_json(ART / "quality.json", out)
+        print(f"{len(tr)} train batches, no val set: performance comes from `python -m main cv`")
+        return
     val = {"xgboost": metrics(y.loc[va], model.predict(X.loc[va]))}
     for k, m in baselines(X.loc[tr], y.loc[tr]).items():
         val[f"baseline_{k}"] = metrics(y.loc[va], m.predict(X.loc[va]))
@@ -158,9 +164,7 @@ def run_quality():
 
     pv = pd.DataFrame({"group": table.group.loc[va], "y": y.loc[va], "y_pred": model.predict(X.loc[va])})
     by_group = {g: metrics(d.y, d.y_pred)["r2"] for g, d in pv.groupby("group")}
-    write_json(ART / "quality.json", {
-        "features": feats, "params": params, "t_cut": split["t_cut"],
-        "cv_rmse": {"fixed": fixed_rmse, "chosen": cv},
+    write_json(ART / "quality.json", out | {
         "val": val, "val_pass": passed, "val_r2_by_group": by_group,
         "val_ci95": bootstrap_ci(y.loc[va], model.predict(X.loc[va]), seed=c["seed"])})  # 15 batches: wide
 
@@ -174,13 +178,14 @@ def run_quality():
 def run_cutoffs():
     """Yield models at several cutoffs (same features as `quality`; clipped ridge at cutoff_linear_fracs,
     XGBoost with the `quality` params elsewhere), for the prediction trend.
-    Saves per batch and cutoff the routed prediction (OOF for train) and every fold model's prediction."""
+    Saves per batch and cutoff the routed prediction (OOF for train) and every fold model's prediction,
+    and for the clipped-ridge cutoffs the routed yield contributions (cutoff_contrib.parquet)."""
     c, q = cfg(), read_json(ART / "quality.json")
     ts, split = load_ts(), load_split()
     risk = pd.read_parquet(DATA / "risk_ts.parquet")
     tr, va, feats, params = split["train"], split["val"], q["features"], q["params"]
     t_end = batch_meta(ts).t_end
-    rows, tables, preds = {}, [], []
+    rows, tables, preds, contribs = {}, [], [], []
     for frac in c["cutoff_fracs"]:
         h = round(frac * t_end[tr].median() / DT) * DT
         if h >= t_end.min():
@@ -201,27 +206,35 @@ def run_cutoffs():
         p["y_pred_lo"], p["y_pred_hi"] = p.y_pred - q, p.y_pred + q
         preds.append(p.assign(t_cut=h, model=name))
         tables.append(X.assign(t_cut=h))
-        v = metrics(y.loc[va], final.predict(X.loc[va]))
-        pv, yv = p.loc[va], y.loc[va]
+        if name == "ridge_clip":  # yield contributions, routed like y_pred (train batch -> its fold model)
+            rest = X.index.difference(tr)
+            parts = [linear_contribs(final, X.loc[rest])] if len(rest) else []
+            parts += [linear_contribs(folds[int(k)], X.loc[g.index]) for k, g in table.loc[tr].groupby("fold")]
+            contribs.append(pd.concat(parts).assign(t_cut=h))
         lower = cv.r2.mean() - 2 * cv.r2.std() / np.sqrt(len(cv))  # beats the mean beyond repeat noise
         rows[f"{h:g}"] = {"t_cut": h, "model": name, "cv_rmse": float(cv.rmse.mean()), "cv_rmse_sd": float(cv.rmse.std()),
-                          "cv_r2": float(cv.r2.mean()), "cv_r2_lower": float(lower), "val_rmse": v["rmse"],
-                          "val_r2": v["r2"], "provided": bool(lower > c["cutoff_min_cv_r2"]),
-                          "interval_halfwidth": q, "val_coverage_interval": float(yv.between(pv.y_pred_lo, pv.y_pred_hi).mean()),
-                          "spread_width_median": float((pv.spread_hi - pv.spread_lo).median()),
-                          "val_coverage_spread": float(yv.between(pv.spread_lo, pv.spread_hi).mean())}
+                          "cv_r2": float(cv.r2.mean()), "cv_r2_lower": float(lower),
+                          "provided": bool(lower > c["cutoff_min_cv_r2"]), "interval_halfwidth": q}
+        if va:
+            v, pv, yv = metrics(y.loc[va], final.predict(X.loc[va])), p.loc[va], y.loc[va]
+            rows[f"{h:g}"] |= {"val_rmse": v["rmse"], "val_r2": v["r2"],
+                               "val_coverage_interval": float(yv.between(pv.y_pred_lo, pv.y_pred_hi).mean()),
+                               "spread_width_median": float((pv.spread_hi - pv.spread_lo).median()),
+                               "val_coverage_spread": float(yv.between(pv.spread_lo, pv.spread_hi).mean())}
     later_ok = True  # provide from the earliest cutoff after which every cutoff passes
     for r in reversed(rows.values()):
         later_ok = r["provided"] = later_ok and r["provided"]
     pd.concat(tables).to_parquet(DATA / "cutoff_features.parquet")
     pd.concat(preds).to_parquet(DATA / "cutoff_preds.parquet")
+    pd.concat(contribs).to_parquet(DATA / "cutoff_contrib.parquet")
     write_json(ART / "cutoffs.json", rows)
-    print(f"{'cutoff':>7}{'cv rmse':>10}{'sd':>6}{'cv r2':>8}{'-2se':>8}{'val rmse':>10}{'val r2':>8}"
-          f"{'+-range':>9}{'cover':>7}{'spread':>8}{'cover':>7}  provided  model")
+    print(f"{'cutoff':>7}{'cv rmse':>10}{'sd':>6}{'cv r2':>8}{'-2se':>8}{'+-range':>9}"
+          + (f"{'val rmse':>10}{'val r2':>8}{'cover':>7}" if va else "") + "  provided  model")
     for k, r in rows.items():
         print(f"{k + ' h':>7}{r['cv_rmse']:10.0f}{r['cv_rmse_sd']:6.0f}{r['cv_r2']:8.3f}{r['cv_r2_lower']:8.3f}"
-              f"{r['val_rmse']:10.0f}{r['val_r2']:8.3f}{r['interval_halfwidth']:9.0f}{r['val_coverage_interval']:7.0%}"
-              f"{r['spread_width_median']:8.0f}{r['val_coverage_spread']:7.0%}  {'yes' if r['provided'] else 'no':<10}{r['model']}")
+              f"{r['interval_halfwidth']:9.0f}"
+              + (f"{r['val_rmse']:10.0f}{r['val_r2']:8.3f}{r['val_coverage_interval']:7.0%}" if va else "")
+              + f"  {'yes' if r['provided'] else 'no':<10}{r['model']}")
 
 
 def run_forecast():
@@ -241,6 +254,12 @@ def run_forecast():
         m.save_model(ART / f"forecast_fold{k}.json")
         tr.loc[fold == k, "oof"] = fc.predict(m, tr[fold == k], cols)
     q = (tr.p_true - tr.oof).abs().groupby(tr.h).quantile(f["interval"])
+    meta = {"features": cols, "horizons": H, "every_h": f["every_h"],
+            "halfwidth": {f"{h:g}": float(v) for h, v in q.items()}}
+    if va.empty:
+        write_json(ART / "forecast_meta.json", meta)
+        print(f"rows: train {len(tr)}, no val set: performance comes from `python -m main cv`")
+        return
     va["pred"] = fc.predict(load_xgb(ART / "forecast.json"), va, cols)
     by_h = {}
     for h, d in va.groupby("h"):
@@ -248,9 +267,7 @@ def run_forecast():
                           "rmse_linear": metrics(d.p_true, fc.linear(d))["rmse"],
                           "halfwidth": float(q[h]), "coverage": float(((d.p_true - d.pred).abs() <= q[h]).mean())}
     passed = all(r["rmse"] < min(r["rmse_persistence"], r["rmse_linear"]) for r in by_h.values())
-    write_json(ART / "forecast_meta.json", {"features": cols, "horizons": H, "every_h": f["every_h"],
-                                            "halfwidth": {f"{h:g}": float(v) for h, v in q.items()},
-                                            "val": by_h, "val_pass": passed})
+    write_json(ART / "forecast_meta.json", meta | {"val": by_h, "val_pass": passed})
     print(f"rows: train {len(tr)}, val {len(va)} ({f['every_h']} h grid x {len(H)} horizons)")
     print(f"{'h':>5}{'rmse':>8}{'persist':>9}{'linear':>8}{'+-80%':>8}{'cover':>7}  (val, g/L)")
     for h in (0.5, 2, 4, 6, 8):
@@ -271,17 +288,20 @@ def run_explain():
     tree_cfg, dummy_cfg = c["tree"], c["dummy"]
     depth, leaf, cv_r2 = select_rule_tree(X.loc[tr], y.loc[tr], table.fold.loc[tr], tree_cfg, c["seed"])
     tree = fit_rule_tree(X.loc[tr], y.loc[tr], depth, leaf, c["seed"])
-    r2 = {s: metrics(y.loc[ids], tree.predict(X.loc[ids]))["r2"] for s, ids in (("train", tr), ("val", va))}
+    r2 = {s: metrics(y.loc[ids], tree.predict(X.loc[ids]))["r2"] for s, ids in (("train", tr), ("val", va)) if ids}
     r2["train_cv"] = cv_r2
     y_ref = float(y.loc[tr].mean())
     rules = export_rules(tree, q["features"], y_ref)
-    reference_only = not r2["val"] > 0  # rules that do not beat the mean on val are shown as reference only
+    reference_only = not r2.get("val", cv_r2) > 0  # rules that do not beat the mean are shown as reference only
     write_json(ART / "rules.json", {
         "rules": rules, "r2": r2, "params": {"max_depth": depth, "min_samples_leaf": leaf},
         "reference_only": reference_only,
         "leaf": {str(b): int(l) for b, l in zip(X.index, tree.apply(X))}})
     dc = dummy_check(X.loc[tr], y.loc[tr], q["params"], **dummy_cfg)
-    cc = cross_check(load_xgb(ART / "xgb.json"), X.loc[va], y.loc[va], X.loc[tr], y.loc[tr], c["seed"])
+    held_out = ([(load_xgb(ART / "xgb.json"), X.loc[va], y.loc[va])] if va else  # else each fold model on its fold
+                [(load_xgb(ART / f"xgb_fold{k}.json"), X.loc[g.index], y.loc[g.index])
+                 for k, g in table.loc[tr].groupby("fold")])
+    cc = cross_check(held_out, X.loc[tr], y.loc[tr], c["seed"])
     write_json(ART / "cross_check.json", cc)
 
     top = global_importance(sh).head(5)
@@ -289,10 +309,11 @@ def run_explain():
     sliders = set(c["sliders"])
     print("top features: " + ", ".join(f"{f} {v:.0f}" for f, v in top.items()) + " (mean |SHAP| kg)")
     print(f"rule tree: max_depth {depth}, min_samples_leaf {leaf}; train r2 {r2['train']:.3f}, "
-          f"train cv r2 {cv_r2:.3f}, val r2 {r2['val']:.3f}{' (reference only)' if reference_only else ''}")
+          f"train cv r2 {cv_r2:.3f}" + (f", val r2 {r2['val']:.3f}" if va else "")
+          + (" (reference only)" if reference_only else ""))
     for r in rules:
         print(f"- {r['text']}")
-    print(f"SHAP vs permutation on val: top3 overlap {cc['overlap']['top3']:.0%}, top5 {cc['overlap']['top5']:.0%}; "
+    print(f"SHAP vs permutation on {'val' if va else 'held-out folds'}: top3 overlap {cc['overlap']['top3']:.0%}, top5 {cc['overlap']['top5']:.0%}; "
           f"SHAP direction = train data direction for "
           f"{sum(t['shap_direction'] == t['data_direction'] for t in cc['top'])}/{len(cc['top'])} of the SHAP top 5")
     print(f"dummy check: {len(meaningless)}/{len(dc)} features meaningless "
@@ -410,7 +431,7 @@ def run_serve():
 STEPS = {"prepare": run_prepare, "check": run_check, "warning": run_warning, "quality": run_quality,
          "cutoffs": run_cutoffs, "forecast": run_forecast, "explain": run_explain, "test": run_test,
          "cv": run_cv, "serve": run_serve}
-ALL = ["prepare", "warning", "quality", "cutoffs", "forecast", "explain"]
+ALL = ["prepare", "warning", "quality", "cutoffs", "forecast", "explain", "cv"]
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(prog="python -m main", description=__doc__.splitlines()[0])

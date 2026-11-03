@@ -107,6 +107,14 @@ def fit_ridge_clip(X, y):
     return make_pipeline(Clip(), StandardScaler(), RidgeCV(alphas=np.logspace(-2, 4, 40))).fit(X, y)
 
 
+def linear_contribs(model, X):
+    """Exact additive terms of a fit_ridge_clip model: coef_j x scaled clipped x_j; '_base' = intercept
+    (the train mean), so base + sum = prediction (the linear counterpart of TreeSHAP)."""
+    clip, scale, ridge = (model[i] for i in range(3))
+    c = pd.DataFrame(scale.transform(clip.transform(X)) * ridge.coef_, index=X.index, columns=X.columns)
+    return c.assign(_base=float(ridge.intercept_))
+
+
 def oof_predict(X, y, params, fold, seed, fit=None):
     """fold k model (trained on the other folds) predicts fold k. Returns predictions and the models."""
     fit = fit or (lambda X, y: make_xgb(params, seed).fit(X, y))
@@ -146,14 +154,16 @@ def _sign_corr(a, b):
     return int(np.sign(c)) if np.isfinite(c) else 0  # 0 = constant feature
 
 
-def cross_check(model, X, y, X_train, y_train, seed=0, n_repeats=30, ks=(3, 5)):
-    """Permutation importance (RMSE increase, kg) vs mean |SHAP| on the same batches: top-k overlap, and per
+def cross_check(parts, X_train, y_train, seed=0, n_repeats=30, ks=(3, 5)):
+    """Permutation importance (RMSE increase, kg) vs mean |SHAP| on held-out batches, parts = [(model, X, y)]
+    with each model scored on batches it did not see (importances averaged over parts): top-k overlap, and per
     top feature the SHAP direction (sign of corr(x, SHAP)) next to the raw train direction (sign of corr(x, y))."""
     from sklearn.inspection import permutation_importance
-    pi = permutation_importance(model, X, y, scoring="neg_root_mean_squared_error", n_repeats=n_repeats,
-                                random_state=seed)
-    perm = pd.Series(pi.importances_mean, index=X.columns).sort_values(ascending=False)
-    sh = shap_values(model, X).drop(columns="_base")
+    perm = sum(pd.Series(permutation_importance(m, X, y, scoring="neg_root_mean_squared_error", n_repeats=n_repeats,
+                                                random_state=seed).importances_mean, index=X.columns)
+               for m, X, y in parts).div(len(parts)).sort_values(ascending=False)
+    X = pd.concat([X for _, X, _ in parts])
+    sh = pd.concat([shap_values(m, Xp) for m, Xp, _ in parts]).drop(columns="_base")
     imp = sh.abs().mean().sort_values(ascending=False)
     top = [{"feature": f, "shap_rank": i + 1, "perm_rank": int(perm.index.get_loc(f)) + 1, "shap_kg": float(imp[f]),
             "perm_rmse_kg": float(perm[f]), "shap_direction": _sign_corr(X[f], sh[f]),

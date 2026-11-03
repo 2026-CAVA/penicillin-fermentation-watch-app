@@ -8,7 +8,7 @@
     pred_trend(batch_id, t) -> list           yield prediction of each cutoff model reached by t
     forecast(batch_id, t) -> dict             penicillin concentration t .. t + 8 h with an 80% range
     optimize(batch_id, max_change) -> dict    slider settings with the best predicted yield (reference only)
-    model_info() -> dict                      model, target, val metrics, alarm rule, demo batches
+    model_info() -> dict                      model, target, repeated-CV metrics, alarm rule, demo batches
     events(batch_id), explanation(batch_id)   excursion list, first-alarm sentence
     compare(ids, vars), reference_batch(id)  series of several batches side by side
 """
@@ -39,7 +39,9 @@ def _state():
             "final": load_xgb(ART / "xgb.json"),
             "folds": {k: load_xgb(ART / f"xgb_fold{k}.json") for k in range(cfg()["split"]["n_folds"])},
             "rules": read_json(ART / "rules.json"), "bounds": slider_bounds(X.loc[split["train"]], cfg()["sliders"]),
-            "trend": _provided(pd.read_parquet(DATA / "cutoff_preds.parquet"), read_json(ART / "cutoffs.json"))}
+            "trend": _provided(pd.read_parquet(DATA / "cutoff_preds.parquet"), read_json(ART / "cutoffs.json")),
+            "early": (_provided(pd.read_parquet(DATA / "cutoff_contrib.parquet"), read_json(ART / "cutoffs.json")),
+                      pd.read_parquet(DATA / "cutoff_features.parquet"))}
 
 
 def _provided(preds, cutoffs):
@@ -99,7 +101,7 @@ def batch_view(batch_id, t=None):
     ready = ts.t.iloc[-1] >= s["split"]["t_cut"]  # the explained model (SHAP, rule, sliders) predicts at t_cut
     x = s["X"].loc[batch_id]
     xf = x.to_frame().T.astype(float)
-    sh = shap_values(model, xf).iloc[0]
+    sh, xs = _yield_contribs(batch_id, float(ts.t.iloc[-1]))
 
     mu, sd = band_at(ts, band)
     w, bvars = float(band["width"]), band["vars"].tolist()
@@ -128,9 +130,11 @@ def batch_view(batch_id, t=None):
         "risk": {"R": _lst(rk.R), "grade": rk.grade.tolist(), "band_alarm": rk.band_alarm.astype(bool).tolist(),
                  "reason": alarm_reason(rk), "cuts": cuts, "alarm_top3": causes},
         "events": events(batch_id, t=t), "explanation": explanation(batch_id, t),
-        "shap_top3": _drivers(sh, x) if ready else [], "shap_base": float(sh["_base"]) if ready else None,
-        # every feature, largest |shap| first; base + sum = y_pred_kg
-        "shap_all": _drivers(sh, x, k=len(x)) if ready else [],
+        # yield contributions (see _yield_contribs): from t_cut TreeSHAP, base + sum = y_pred_kg; before t_cut
+        # the early clipped-ridge terms, base + sum = pred_latest_kg; every feature in shap_all, largest |value| first
+        "shap_top3": _drivers(sh, xs) if sh is not None else [],
+        "shap_base": float(sh["_base"]) if sh is not None else None,
+        "shap_all": _drivers(sh, xs, k=len(xs)) if sh is not None else [],
         "rule": {**next(r for r in s["rules"]["rules"] if r["leaf"] == leaf), "tree_r2": s["rules"]["r2"],
                  "reference_only": s["rules"]["reference_only"]} if ready else None,
         "whatif": {
@@ -238,13 +242,13 @@ def detail(batch_id, t=None):
     trend = pred_trend(batch_id, t)
     hs, ys = np.array([p["t_cut"] for p in trend]), np.array([p["y_pred"] for p in trend] + [np.nan])
     i = np.searchsorted(hs, ts.t.to_numpy() + 1e-9, side="right") - 1  # -1 before the first cutoff -> nan
-    ready = ts.t.iloc[-1] >= s["split"]["t_cut"]  # SHAP explains the t_cut model
+    sh, _ = _yield_contribs(batch_id, float(ts.t.iloc[-1]))
     rows = pd.DataFrame({"t": ts.t, **{k: ts[c] for k, c in SERIES.items()}, "score": rk.R,
                          "state": rk.grade.map(STATE), "predictedFinal": ys[i]})
     rows = rows.astype(object).where(rows.notna(), None)
     meta = {k: {"column": c, **_meta(c)} for k, c in SERIES.items()}
     return {**summary(batch_id, t), "intervalH": DT,
-            "shapBase": _shap(batch_id)["_base"] if ready else None,
+            "shapBase": float(sh["_base"]) if sh is not None else None,
             "explanation": explanation(batch_id, t)["text"], "seriesMeta": meta,
             "series": rows.to_dict("records")}
 
@@ -255,12 +259,29 @@ def _shap(batch_id):
     return shap_values(model, _state()["X"].loc[[batch_id]].astype(float)).iloc[0].astype(float).to_dict()
 
 
+def _yield_contribs(batch_id, t=None):
+    """(contributions incl. '_base', feature values) behind the yield prediction at t: TreeSHAP of the t_cut
+    model from t_cut on; before it the clipped-ridge terms of the latest provided early cutoff reached by t
+    (base + sum = that early prediction); (None, None) before the first provided cutoff."""
+    s = _state()
+    if t is None or t >= s["split"]["t_cut"]:
+        return pd.Series(_shap(batch_id)), s["X"].loc[batch_id]
+    c, x = s["early"]
+    c = c[(c.index == batch_id) & (c.t_cut <= t + 1e-9)]
+    if c.empty:
+        return None, None
+    h = c.t_cut.max()
+    x = x[(x.index == batch_id) & (x.t_cut == h)]
+    return c[c.t_cut == h].iloc[0].drop("t_cut").astype(float), x.iloc[0].drop("t_cut").astype(float)
+
+
 def shap_top(batch_id, k=5, t=None):
-    """Yield SHAP (one per batch, not per time point), largest |value| first; k=None for every feature.
-    Empty before t_cut: there is no yield prediction yet."""
-    if t is not None and t < _state()["split"]["t_cut"]:
+    """Yield contributions (see _yield_contribs; one set per cutoff, not per time point), largest |value|
+    first; k=None for every feature. Empty before the first provided cutoff: no yield prediction yet."""
+    sh, _ = _yield_contribs(batch_id, t)
+    if sh is None:
         return []
-    sh = pd.Series(_shap(batch_id)).drop("_base")
+    sh = sh.drop("_base")
     return [{"feature": f, "label": feature_label(f), "value": float(sh[f])}
             for f in sh.abs().sort_values(ascending=False).index[:k]]
 
@@ -277,21 +298,28 @@ def contrib(batch_id, t):
 
 
 def model_info():
-    """Header line and the numbers behind it (validation set only; the test set is evaluated once, separately)."""
+    """Header line and the numbers behind it. Performance = repeated CV over every normal batch (`cv` step:
+    the whole pipeline refit without the scored batches); the final models are trained on all of them."""
     s = _state()
-    q, th, r = read_json(ART / "quality.json"), s["th"], s["rules"]
-    v = q["val"]["xgboost"]
-    return {"title": f"Plan A · XGBoost · val R² {v['r2']:.2f}", "plan": "Plan A", "model": "XGBoost",
+    q, th, r, cv = read_json(ART / "quality.json"), s["th"], s["rules"], read_json(ART / "cv.json")
+    cut = read_json(ART / "cutoffs.json")
+    t_cut = s["split"]["t_cut"]
+    used = {f"{c['t_cut']:g}": c["model"] for c in cut.values()}  # model per cutoff, as in `cutoffs`
+    r2 = cv["yield"][f"normal {t_cut:g} h xgboost"]["r2"]
+    return {"title": f"Plan A · ridge + XGBoost · CV R² {r2['mean']:.2f} at {t_cut:g} h", "plan": "Plan A",
+            "model": {"before_t_cut": "ridge (clipped inputs)", "from_t_cut": "XGBoost"},
             "target": target(), "n_features": len(q["features"]), "n_train": len(s["split"]["train"]),
-            "n_val": len(s["split"]["val"]), "val": q["val"], "val_ci95": q["val_ci95"], "val_pass": q["val_pass"],
-            "val_r2_by_group": q["val_r2_by_group"], "cutoffs": read_json(ART / "cutoffs.json"),
+            "cv": {"setup": cv["config"], "n_normal": cv["n_normal"], "n_fault": cv["n_fault"], "alarms": cv["alarms"],
+                   "yield": {h: cv["yield"][f"normal {h} h {m}"] for h, m in used.items()}, "forecast": cv["forecast"],
+                   "note": "mean / min / max over repeats; each batch scored by a pipeline that never saw it"},
+            "cutoffs": cut,
             "alarm": {"cuts": th["cuts"], "persist_points": th["persist"], "persist_h": th["persist"] * DT,
                       "band_rule": th["band_rule"] if th["band_rule"]["n_vars"] <= len(s["bands"]["full"]["vars"]) else None,
-                      "tuned_on": th["tune_on"], "val_false_alarms": th["val_far"], "train_false_alarms": th["train_far"]},
+                      "tuned_on": th["tune_on"], "train_false_alarms": th["train_far"]},
             "rule_tree": {"r2": r["r2"], "reference_only": r["reference_only"]},
             "cross_check": {**(cc := read_json(ART / "cross_check.json")),
                             "top": [{**t, "label": feature_label(t["feature"])} for t in cc["top"]],
-                            "note": f"Validation set ({len(s['split']['val'])} batches): reference only. "
+                            "note": "Each fold model on its own held-out fold. "
                                     "Directions: +1 = higher value, higher yield; 0 = constant feature."},
             "forecast": {k: v for k, v in read_json(ART / "forecast_meta.json").items() if k != "features"},
             "sliders": list(s["bounds"]), "demo_batches": cfg()["demo_batches"]}
