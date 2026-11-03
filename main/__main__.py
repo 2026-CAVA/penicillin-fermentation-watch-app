@@ -399,7 +399,7 @@ def run_test():
     for name in ("combined_warning+", "combined_critical"):
         m = warn.loc[name]
         print(f"{name}: detected {m['batch_detection'] * len(t_fault):.0f}/{len(t_fault)} fault batches, "
-              f"sensitivity {m['sensitivity_points']:.1%}, median lead {m['lead_time_h_median']:.1f} h, "
+              f"sensitivity {m['sensitivity_points']:.1%}, median delay after onset {m['delay_h_median']:.1f} h, "
               f"false alarms {m['far_points']:.1%} of points, "
               f"{m['far_batches'] * len(t_norm):.0f}/{len(t_norm)} batches")
     print(f"{'yield':<26}{'rmse':>7}{'r2':>8}")

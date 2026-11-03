@@ -110,7 +110,7 @@ def run_cv():
                 alarms.append({"repeat": r, "k": j, "signal": name, "cuts": rule["cuts"],
                                "normal_alarmed": m["far_batches"] * len(ev), "n_normal": len(ev),
                                "fault_detected": m["batch_detection"] * len(faults), "n_fault": len(faults),
-                               "delay_h_median": m["lead_time_h_median"]})
+                               "delay_h_median": m["delay_h_median"]})
             tables = {h: build_batch_table(rt, risk, meta, h, c["features"]) for h in hours}
             preds.append(_yield(tables, y, train, ev + faults, inner, params, c["seed"], c["pred_interval"], v["spline"])
                          .assign(repeat=r, k=j))

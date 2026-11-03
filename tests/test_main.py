@@ -168,7 +168,7 @@ def test_rule_whatif(s):
 def test_warning_metrics():
     rt = pd.DataFrame({"batch": [1] * 4 + [2] * 4, "t": [0, 1, 2, 3] * 2, "fault_ref": [0, 0, 1, 1, 0, 0, 0, 0]})
     m = warning_metrics(rt, pd.Series([0, 0, 0, 1, 0, 1, 0, 0], dtype=bool), [1], [2])
-    assert m["batch_detection"] == 1 and m["sensitivity_points"] == 0.5 and m["lead_time_h_median"] == 1
+    assert m["batch_detection"] == 1 and m["sensitivity_points"] == 0.5 and m["delay_h_median"] == 1
     assert m["far_points"] == 0.25 and m["far_batches"] == 1
 
 
@@ -448,7 +448,10 @@ def test_early_contributions_add_up(s):
         d = service.detail(bid, h)
         sh = service.shap_top(bid, None, h)
         assert d["shapBase"] + sum(x["value"] for x in sh) == pytest.approx(d["predictedFinal"], rel=1e-6)
-        assert service.batch_view(bid, h)["shap_all"][0]["feature"] == sh[0]["feature"]
+        v = service.batch_view(bid, h)
+        assert v["shap_all"][0]["feature"] == sh[0]["feature"] and v["shap_t_cut"] == h
+        labels = [x["label"] for x in sh]  # spans name the early cutoff, not the 115 h one
+        assert not any("First-half" in x or "t_cut" in x for x in labels) and any(f"0-{h:g} h" in x for x in labels)
     X = pd.DataFrame({"a": [1.0, 2, 3, 4, 50], "b": [0.0, 1, 0, 1, 0]})
     m = fit_ridge_clip(X, pd.Series([1.0, 2, 3, 4, 5]))
     c = linear_contribs(m, X)

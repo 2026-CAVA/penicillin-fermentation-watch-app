@@ -177,7 +177,8 @@ def fit_warning(ts, rt, train, fold, tune, c):
 
 
 def warning_metrics(risk_ts, alarm, fault_batches, normal_batches):
-    """alarm: bool Series aligned to risk_ts (needs batch, t, fault_ref)."""
+    """alarm: bool Series aligned to risk_ts (needs batch, t, fault_ref). delay_h_median = median hours from
+    fault onset to the first alarm at or after it (a detection delay, not a lead time)."""
     d = risk_ts.assign(alarm=alarm.to_numpy())
     f, n = d[d.batch.isin(fault_batches)], d[d.batch.isin(normal_batches)]
     out = {"far_points": float(n.alarm.mean()) if len(n) else np.nan,
@@ -188,6 +189,6 @@ def warning_metrics(risk_ts, alarm, fault_batches, normal_batches):
         first = f[f.alarm & (f.t >= f.batch.map(onset))].groupby("batch").t.min()
         out |= {"batch_detection": float(f.groupby("batch").alarm.any().mean()),
                 "sensitivity_points": float(in_fault.alarm.mean()),
-                "lead_time_h_median": float((first - onset.reindex(first.index)).median()) if len(first) else np.nan,
+                "delay_h_median": float((first - onset.reindex(first.index)).median()) if len(first) else np.nan,
                 "detected_after_onset": int(len(first)), "n_fault_batches": int(f.batch.nunique())}
     return out

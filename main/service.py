@@ -77,8 +77,8 @@ def _meta(v):
     return m | ({"delay_h": cfg()["offline_delay_h"]} if m["kind"] == "offline" else {})
 
 
-def _drivers(shap_row, x_row, k=3):
-    return [{**d, "label": feature_label(d["feature"])} for d in top_k_drivers(shap_row, x_row, k)]
+def _drivers(shap_row, x_row, k=3, t_cut=None):
+    return [{**d, "label": feature_label(d["feature"], t_cut)} for d in top_k_drivers(shap_row, x_row, k)]
 
 
 def _lst(a):
@@ -101,7 +101,7 @@ def batch_view(batch_id, t=None):
     ready = ts.t.iloc[-1] >= s["split"]["t_cut"]  # the explained model (SHAP, rule, sliders) predicts at t_cut
     x = s["X"].loc[batch_id]
     xf = x.to_frame().T.astype(float)
-    sh, xs = _yield_contribs(batch_id, float(ts.t.iloc[-1]))
+    sh, xs, h = _yield_contribs(batch_id, float(ts.t.iloc[-1]))
 
     mu, sd = band_at(ts, band)
     w, bvars = float(band["width"]), band["vars"].tolist()
@@ -132,9 +132,9 @@ def batch_view(batch_id, t=None):
         "events": events(batch_id, t=t), "explanation": explanation(batch_id, t),
         # yield contributions (see _yield_contribs): from t_cut TreeSHAP, base + sum = y_pred_kg; before t_cut
         # the early clipped-ridge terms, base + sum = pred_latest_kg; every feature in shap_all, largest |value| first
-        "shap_top3": _drivers(sh, xs) if sh is not None else [],
+        "shap_top3": _drivers(sh, xs, 3, h) if sh is not None else [],
         "shap_base": float(sh["_base"]) if sh is not None else None,
-        "shap_all": _drivers(sh, xs, k=len(xs)) if sh is not None else [],
+        "shap_all": _drivers(sh, xs, len(xs), h) if sh is not None else [], "shap_t_cut": h,
         "rule": {**next(r for r in s["rules"]["rules"] if r["leaf"] == leaf), "tree_r2": s["rules"]["r2"],
                  "reference_only": s["rules"]["reference_only"]} if ready else None,
         "whatif": {
@@ -242,7 +242,7 @@ def detail(batch_id, t=None):
     trend = pred_trend(batch_id, t)
     hs, ys = np.array([p["t_cut"] for p in trend]), np.array([p["y_pred"] for p in trend] + [np.nan])
     i = np.searchsorted(hs, ts.t.to_numpy() + 1e-9, side="right") - 1  # -1 before the first cutoff -> nan
-    sh, _ = _yield_contribs(batch_id, float(ts.t.iloc[-1]))
+    sh, _, _ = _yield_contribs(batch_id, float(ts.t.iloc[-1]))
     rows = pd.DataFrame({"t": ts.t, **{k: ts[c] for k, c in SERIES.items()}, "score": rk.R,
                          "state": rk.grade.map(STATE), "predictedFinal": ys[i]})
     rows = rows.astype(object).where(rows.notna(), None)
@@ -260,29 +260,29 @@ def _shap(batch_id):
 
 
 def _yield_contribs(batch_id, t=None):
-    """(contributions incl. '_base', feature values) behind the yield prediction at t: TreeSHAP of the t_cut
-    model from t_cut on; before it the clipped-ridge terms of the latest provided early cutoff reached by t
-    (base + sum = that early prediction); (None, None) before the first provided cutoff."""
+    """(contributions incl. '_base', feature values, cutoff hour) behind the yield prediction at t: TreeSHAP of
+    the t_cut model from t_cut on; before it the clipped-ridge terms of the latest provided early cutoff reached
+    by t (base + sum = that early prediction); (None, None, None) before the first provided cutoff."""
     s = _state()
     if t is None or t >= s["split"]["t_cut"]:
-        return pd.Series(_shap(batch_id)), s["X"].loc[batch_id]
+        return pd.Series(_shap(batch_id)), s["X"].loc[batch_id], float(s["split"]["t_cut"])
     c, x = s["early"]
     c = c[(c.index == batch_id) & (c.t_cut <= t + 1e-9)]
     if c.empty:
-        return None, None
-    h = c.t_cut.max()
+        return None, None, None
+    h = float(c.t_cut.max())
     x = x[(x.index == batch_id) & (x.t_cut == h)]
-    return c[c.t_cut == h].iloc[0].drop("t_cut").astype(float), x.iloc[0].drop("t_cut").astype(float)
+    return c[c.t_cut == h].iloc[0].drop("t_cut").astype(float), x.iloc[0].drop("t_cut").astype(float), h
 
 
 def shap_top(batch_id, k=5, t=None):
     """Yield contributions (see _yield_contribs; one set per cutoff, not per time point), largest |value|
     first; k=None for every feature. Empty before the first provided cutoff: no yield prediction yet."""
-    sh, _ = _yield_contribs(batch_id, t)
+    sh, _, h = _yield_contribs(batch_id, t)
     if sh is None:
         return []
     sh = sh.drop("_base")
-    return [{"feature": f, "label": feature_label(f), "value": float(sh[f])}
+    return [{"feature": f, "label": feature_label(f, h), "value": float(sh[f])}
             for f in sh.abs().sort_values(ascending=False).index[:k]]
 
 

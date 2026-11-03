@@ -78,8 +78,9 @@ cd back
 같은 버전으로 설치했다면 `all`에서 아래 값이 나와야 합니다.
 
 ```
-R(t) cuts: WARNING >= 1, CRITICAL >= 14; band rule: >= 2 vars for 2 points (24 min)
-xgboost                496    451   17.0  0.564
+R(t) cuts: WARNING >= 28, CRITICAL >= 68, held 5 points (60 min); band rule: off (no setting meets the target); tuned on train normal batches
+  115 h       560    19   0.498   0.476      742  yes       xgboost
+alarm warning+  normal batches alarmed 10% (7%-13%), faults detected 78% (74%-80%), delay after onset 4.5 (3.3-7.2) h, cuts [23, 84]
 ```
 
 ## 테스트
@@ -115,25 +116,78 @@ xgboost                496    451   17.0  0.564
 | 통과 | 농도 예측이 모든 시간 거리에서 지속·선형 연장보다 나음 | RMSE 0.25~0.37 g/L (기준선 0.56~2.67) |
 | 통과 | 농도 80 % 범위 포함률 70~90 % | 75~77 % |
 
-- 고장 10배치 중 7개를 탐지했고, 고장 시작 **후** 중앙값 7.2 h에 처음 경보가 났습니다(출력의 `lead` 값은 탐지 지연입니다).
+- 고장 10배치 중 7개를 탐지했고, 고장 시작 **후** 중앙값 7.2 h에 처음 경보가 났습니다(당시 출력의 `lead` 값은 탐지 지연이었고, 지금 이름은 `delay_h_median`입니다).
 - 실행 전 확인 과정에서 시험 배치 92번의 예측·경보를 출력해 본 적이 있습니다(조정에는 쓰지 않음).
 - 15배치 한 번의 평가는 흔들림이 커서(XGBoost R² 95 % 구간 0.17~0.60), 이후 평가는 정상 90배치 반복 교차검증으로 바꿉니다.
 
 ## 프론트 API
 
-```python
-from main.service import list_batches, batch_view, run_whatif
+### 서버 실행
 
-list_batches()                    # [{batch_id, group, is_fault, split, tag}, ...]
-batch_view(92)                    # 배치 하나의 화면 데이터 (JSON 직렬화 가능한 dict)
+```powershell
+.venv\Scripts\python -m main serve                                   # 이 PC에서만: http://127.0.0.1:8000
+.venv\Scripts\python -m uvicorn main.api:app --host 0.0.0.0 --port 8000  # 같은 네트워크의 다른 PC에서도 접속
+```
+
+- 서버는 학습하지 않고 `data/cache/`와 `artifacts/`만 읽습니다. `all`을 한 번 돌린 폴더에서 실행합니다.
+- 경로별 입력·출력은 서버를 띄운 뒤 `/docs`에서 직접 눌러 볼 수 있습니다.
+- CORS는 모든 출처를 허용합니다. 외부에 공개할 서버라면 `main/api.py`의 `allow_origins`를 프론트 주소로 좁힙니다.
+- 외부 접속 주소(누가, 어디에 띄울지)는 아직 정하지 않았습니다.
+
+### 경로
+
+모든 경로에서 `t`(시간, h)를 주면 그 시각까지의 데이터만 씁니다(진행 중 배치 재생). 미래 값이 응답에 섞이지 않는 것은 테스트로 확인합니다.
+
+| 경로 | 내용 |
+|---|---|
+| `GET /batches?t=` | 배치 100개 요약 (목업 `BatchSummary` 형태) |
+| `GET /batches/{id}?t=` | 요약 + 시점별 시계열(`series`), 수율 기여도 기준값(`shapBase`), 경보 설명 한 문장 |
+| `GET /batches/{id}/shap?t=&k=` | 수율 기여도 상위 k개(기본 5, `k=0`이면 전부). 첫 예측 시점(46 h) 전에는 빈 목록 |
+| `GET /batches/{id}/contrib?t=` | 시각 t의 위험점수 R(t)를 변수별로 나눈 비율 (시점마다 바뀌는 원인) |
+| `GET /batches/{id}/events?all=&t=` | 1 h 이상 이어진 이탈 목록 (기본은 경보와 겹친 것만) |
+| `GET /batches/{id}/forecast?t=` | t부터 8 h 뒤까지 페니실린 농도(g/L) 경로, 0.5 h 간격, 80 % 범위 |
+| `GET /compare?ids=6,92&vars=DO,pH` | 여러 배치 시계열 나란히 (하나만 주면 같은 그룹 정상 배치를 기준으로 붙임) |
+| `POST /simulate` | `{"batch_id": 6, "changes": {"Fpaa_tot": 0.05}}` → 슬라이더를 바꿨을 때 예상 수율 변화 |
+| `POST /batches/{id}/optimize` | `{"max_change": 0.2}`(생략 가능) → 슬라이더 추천값 (참고용) |
+| `GET /model` | 화면 머리말, 시점별 모델, 반복 CV 성능(`cv`), 경보 기준, 시연 배치 |
+
+### 값 읽는 법
+
+- **배치 번호** `id`는 숫자(1~100)입니다. 91~100이 고장 배치입니다.
+- **예측 수율**은 kg입니다. `predictedFinal`은 그 시각까지 도달한 가장 늦은 컷오프(46·69·92·115·138·161 h)의 예측이고, `predictedRange`는 80 % 범위입니다(과거 오차의 80 % 분위수, 반복 CV에서 실제 포함률 79~85 %).
+- **115 h 이전 예측은 초기 추정**입니다(ridge, R² 약 0.4). `batch_view`의 `pred_trend`에서 `model`이 `"ridge_clip"`인 항목입니다. 화면에 "초기 추정" 표시를 붙여 주세요.
+- **수율 기여도**: `shapBase + 기여도 합 = 그 시점 예측`입니다. 115 h부터는 XGBoost TreeSHAP, 그 전에는 ridge 계수 × 값입니다. 라벨에 계산 구간이 들어 있습니다(예: "0-46 h mean Oxygen uptake rate").
+- **위험점수** `score`는 R(t) 0~100입니다. `scoreCuts`의 `[WARNING, CRITICAL]`(지금 28, 68) 이상이 1 h 이어지면 `caution` / `anomaly`가 됩니다.
+- **단위**: 온도 K, DO mg/L, 페니실린 농도 g/L, 유량 L/h, 총량 L.
+- **정상 배치의 예측은 모두 그 배치를 빼고 학습한 모델의 값**입니다(`pred_source: "oof"`). 고장 배치는 최종 모델(`"final"`)입니다.
+
+### 목업 팀에 전달할 것
+
+| 항목 | 목업 | 이 API |
+|---|---|---|
+| 예측 대상 | 최종 농도 g/L | 최종 총수율 kg. 농도는 8 h 앞까지만 `/forecast`로 |
+| 점수 범위 | 0~1, 주의 0.4 / 이상 0.6 | R(t) 0~100, 경계값은 `scoreCuts`를 그대로 사용 (정규화하지 않음) |
+| 예측 범위 | 95 % 구간 | 80 % 범위 (반복 CV로 포함률 확인) |
+| 슬라이더 | 온도, pH, 교반속도, 공급 유량 | 전반부 PAA·산·염기·냉각수·가열수 총량 5개 (`/model`의 `sliders`). 교반속도는 100 rpm 고정 |
+| `POST /simulate` 응답 | 시간에 따른 곡선 | 예상 수율 한 값의 변화 (`y_pred_before`, `y_pred_after`, `delta`, `inputs`, `top3`) |
+| 배치 `id` | 문자열 | 숫자 1~100 |
+| 도메인 값 | 온도 34~42 °C, "Recombinant Protein A" | 페니실린 공정, 온도 K |
+| 초기 추정 | 없음 | 46~92 h 예측에 "초기 추정" 표시 필요 |
+| `GET /model` | – | 2026-11-03부터 `val`, `val_ci95`, `n_val`, `val_pass`, `val_r2_by_group`, `alarm.val_false_alarms` 키가 없어지고 `cv`(반복 CV 성능)와 `model.before_t_cut` / `model.from_t_cut`가 생김 |
+
+### Python에서 직접
+
+```python
+from main.service import batch_view, run_whatif, model_info
+
+batch_view(92, t=100)               # 100 h까지의 배치 화면 데이터 (JSON 직렬화 가능한 dict)
 run_whatif(92, {"Fpaa_tot": 0.05})  # 슬라이더: 전반부 PAA 공급 +5%
 ```
 
-- 저장소 폴더(`back`)를 작업 위치로 두고 실행합니다. 학습은 하지 않고 `data/cache/`와 `artifacts/`만 읽습니다.
-- `batch_view` 주요 키: `pred_source`(학습 배치는 `"oof"` = 그 배치를 빼고 학습한 모델, 그 외 `"final"`), `tag`, `light_final` / `light_worst`, `y_pred_kg` / `y_true_kg`, `t`, `series`(변수별 값·밴드·안전선), `risk`(R(t)·등급·경보 원인 Top 3), `shap_top3` / `shap_all` / `shap_base`(수율 기여도: 115 h부터 TreeSHAP, 그 전에는 ridge 계수 × 값, 어느 쪽이든 base + 합 = 그 시점 예측), `pred_trend`(시점별 예측, `model`이 `"ridge_clip"`이면 초기 추정), `rule`, `whatif`(슬라이더 범위·반응 곡선, 규칙 What-if).
+- `batch_view` 주요 키: `pred_source`, `tag`, `light_final` / `light_worst`, `y_pred_kg` / `y_true_kg`, `t`, `series`(변수별 값·밴드·안전선), `risk`(R(t)·등급·경보 원인 Top 3), `shap_top3` / `shap_all` / `shap_base` / `shap_t_cut`(수율 기여도와 그 컷오프), `pred_trend`(시점별 예측), `rule`, `whatif`(슬라이더 범위·반응 곡선, 규칙 What-if).
 - 화면 문구(꼬리표, 안내, 슬라이더 이름)는 영어입니다. 슬라이더 이름은 `config.yaml`의 `sliders`에서 바꿉니다.
-- 슬라이더는 학습 배치마다 값이 다른 전반부 조작 변수입니다: PAA·산·염기·냉각수·가열수 총량(`Fpaa_tot`, `Fa_tot`, `Fb_tot`, `Fc_tot`, `Fh_tot`). 산·염기·냉각수·가열수는 pH·온도 제어기가 정하는 값입니다. 설탕·오일·주입수·통기·압력은 0~t_cut 동안 모든 배치가 같은 레시피라서 빠졌고, 학습 범위가 한 점인 슬라이더는 `service`가 자동으로 뺍니다.
-- (설탕이 다시 슬라이더가 되면) 설탕 공급(`Fs_tot`)을 늘리면 늘어난 양(L)만큼 전반부 끝 부피 `V_last`(L)와 무게 `Wt_last`(kg, 밀도 약 1 kg/L 가정)도 함께 늘린 뒤 예측합니다. `run_whatif` 결과의 `inputs`에 `V_last`·`Wt_last`가 `linked_to: "Fs_tot"`로 함께 나오고, 반응 곡선도 같은 방식으로 계산합니다. 비율은 `main/whatif.py`의 `COUPLED`에서 바꿉니다.
+- 슬라이더는 배치마다 값이 다른 전반부 조작 변수입니다: PAA·산·염기·냉각수·가열수 총량(`Fpaa_tot`, `Fa_tot`, `Fb_tot`, `Fc_tot`, `Fh_tot`). 산·염기·냉각수·가열수는 pH·온도 제어기가 정하는 값입니다. 설탕·오일·주입수·통기·압력은 0~t_cut 동안 모든 배치가 같은 레시피라서 빠졌고, 학습 범위가 한 점인 슬라이더는 `service`가 자동으로 뺍니다.
+- (설탕이 다시 슬라이더가 되면) 설탕 공급(`Fs_tot`)을 늘리면 늘어난 양(L)만큼 전반부 끝 부피 `V_last`(L)와 무게 `Wt_last`(kg, 밀도 약 1 kg/L 가정)도 함께 늘린 뒤 예측합니다. 비율은 `main/whatif.py`의 `COUPLED`에서 바꿉니다.
 
 ## Appendix
 

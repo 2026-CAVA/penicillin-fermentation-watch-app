@@ -3,14 +3,14 @@
     t (hours, optional): only data up to t, as if the batch were still running (Replay)
     GET  /batches?t=               list (mockup BatchSummary rows)
     GET  /batches/{id}?t=          summary + per-time-point series
-    GET  /batches/{id}/shap?t=&k=  yield SHAP top k (default 5, k=0 for all); empty before t_cut
+    GET  /batches/{id}/shap?t=&k=  yield contributions top k (default 5, k=0 for all); empty before the first cutoff
     GET  /batches/{id}/contrib?t=  R(t) contribution per variable at t (the per-time explanation)
     POST /simulate                 {"batch_id": 92, "changes": {"Fpaa_tot": 0.05}} -> run_whatif
     GET  /batches/{id}/events?all=&t= excursions per variable (>= 1 h) during alarms; all=true for every one
     GET  /compare?ids=6,92&vars=DO,pH   batches side by side (one id: a reference batch is added)
     GET  /batches/{id}/forecast?t= penicillin concentration t .. t + 8 h with an 80% range
     POST /batches/{id}/optimize    {"max_change": 0.2} (optional) -> best slider settings (reference only)
-    GET  /model                    model, target, validation metrics, alarm rule, demo batches
+    GET  /model                    model, target, repeated-CV metrics, alarm rule, demo batches
 """
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware

@@ -38,8 +38,14 @@ FIXED_LABELS = {"R_mean": "Mean risk score R(t) up to t_cut", "R_max": "Max risk
                 "ctrl_operator": "Operator-controlled batch (0/1)", "ctrl_apc": "APC-controlled batch (0/1)"}
 
 
-def feature_label(f):
-    """Display name with unit for a batch-table feature, e.g. DO_min -> 'First-half min Dissolved oxygen (mg/L)'."""
+def feature_label(f, t_cut=None):
+    """Display name with unit for a batch-table feature, e.g. DO_min -> 'First-half min Dissolved oxygen (mg/L)';
+    with t_cut (the cutoff the feature was built at) the span is explicit: '0-46 h min Dissolved oxygen (mg/L)'."""
+    label = _feature_label(f)
+    return label if t_cut is None else label.replace("First-half", f"0-{t_cut:g} h").replace("t_cut", f"{t_cut:g} h")
+
+
+def _feature_label(f):
     if f in FIXED_LABELS:
         return FIXED_LABELS[f]
     for suffix, text in (("_min_t", "Hour of minimum {} (h)"), ("_mean", "First-half mean {} ({})"),
