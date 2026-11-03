@@ -55,6 +55,8 @@ split:
 offline_delay_h: 4        # Li et al. 2024: offline results arrive 4 h after sampling
 cutoff_frac: 0.5          # t_cut = frac x median train batch length, same absolute hour for every batch
 cutoff_fracs: [0.2, 0.3, 0.4, 0.5, 0.6, 0.7]   # prediction trend: one model per cutoff (x median train length)
+cutoff_linear_fracs: [0.2, 0.3, 0.4]  # clipped ridge here, XGBoost at the rest (P10 CV: ridge
+                                      # wins 46-92 h, XGBoost/spline catch the PAA threshold later)
 cutoff_min_cv_r2: 0.0     # shown from the earliest cutoff whose repeated-CV r2 (mean - 2 SE), and every
                           # later cutoff's, is above this (beats the train mean beyond noise)
 pred_interval: 0.8        # y_pred +- the 80% quantile of train out-of-fold |error| (val coverage is reported);

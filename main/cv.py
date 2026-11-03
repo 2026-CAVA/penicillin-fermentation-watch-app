@@ -9,41 +9,22 @@ import time
 
 import numpy as np
 import pandas as pd
-from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.compose import ColumnTransformer
 from sklearn.linear_model import RidgeCV
 from sklearn.model_selection import StratifiedKFold
 from sklearn.pipeline import make_pipeline
-from sklearn.preprocessing import SplineTransformer, StandardScaler
+from sklearn.preprocessing import SplineTransformer
 
 from main import forecast as fc
 from main.data import (ART, DATA, DT, batch_meta, batch_yield_kg, build_batch_table, cfg, load_ts, offline_available,
                        write_json)
-from main.model import baselines, make_xgb, metrics
+from main.model import baselines, fit_ridge_clip, make_xgb, metrics
 from main.warning import fit_warning, warning_metrics
 
 
 def _parts(ids, groups, n, seed):
     skf = StratifiedKFold(n, shuffle=True, random_state=seed)
     return [(ids[a], ids[b]) for a, b in skf.split(ids, groups)]
-
-
-class Clip(BaseEstimator, TransformerMixin):
-    """Clip each feature to its [q, 1 - q] training quantiles."""
-    def __init__(self, q=0.01):
-        self.q = q
-
-    def fit(self, X, y=None):
-        self.lo_, self.hi_ = X.quantile(self.q), X.quantile(1 - self.q)
-        return self
-
-    def transform(self, X):
-        return X.clip(self.lo_, self.hi_, axis=1)
-
-
-def fit_ridge_clip(X, y):
-    """The ridge baseline with features clipped to the training range (guards against far-out batches)."""
-    return make_pipeline(Clip(), StandardScaler(), RidgeCV(alphas=np.logspace(-2, 4, 40))).fit(X, y)
 
 
 def fit_spline(X, y, s):

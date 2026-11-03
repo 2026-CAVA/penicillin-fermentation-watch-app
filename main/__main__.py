@@ -16,9 +16,9 @@ from main import forecast as fc
 from main.cv import run_cv
 from main.data import (ART, DATA, DT, assemble, batch_meta, batch_yield_kg, cfg, feature_cols, load_raw,
                        load_split, load_ts, make_split, names, offline_available, raw_path, read_json, write_json)
-from main.model import (baselines, bootstrap_ci, cross_check, dummy_check, export_rules, fit_rule_tree, global_importance,
-                        load_xgb, make_xgb, metrics, oof_predict, repeated_cv, search_params, select_rule_tree,
-                        shap_values)
+from main.model import (baselines, bootstrap_ci, cross_check, dummy_check, export_rules, fit_ridge_clip, fit_rule_tree,
+                        global_importance, load_xgb, make_xgb, metrics, oof_predict, repeated_cv, search_params,
+                        select_rule_tree, shap_values)
 from main.warning import fit_warning, save_bands, warning_metrics
 
 
@@ -172,7 +172,8 @@ def run_quality():
 
 
 def run_cutoffs():
-    """Yield models at several cutoffs (same features and params as `quality`), for the prediction trend.
+    """Yield models at several cutoffs (same features as `quality`; clipped ridge at cutoff_linear_fracs,
+    XGBoost with the `quality` params elsewhere), for the prediction trend.
     Saves per batch and cutoff the routed prediction (OOF for train) and every fold model's prediction."""
     c, q = cfg(), read_json(ART / "quality.json")
     ts, split = load_ts(), load_split()
@@ -186,9 +187,11 @@ def run_cutoffs():
             raise ValueError(f"cutoff {h} h is not before the shortest batch ({t_end.min()} h)")
         table = assemble(ts, risk, split, h)
         X, y = table[feats], table.y
-        cv = repeated_cv(X.loc[tr], y.loc[tr], params, c["seed"])
-        final = make_xgb(params, c["seed"]).fit(X.loc[tr], y.loc[tr])
-        oof, folds = oof_predict(X.loc[tr], y.loc[tr], params, table.fold.loc[tr], c["seed"])
+        name = "ridge_clip" if frac in c["cutoff_linear_fracs"] else "xgboost"
+        fit = fit_ridge_clip if name == "ridge_clip" else (lambda X, y: make_xgb(params, c["seed"]).fit(X, y))
+        cv = repeated_cv(X.loc[tr], y.loc[tr], params, c["seed"], fit=fit)
+        final = fit(X.loc[tr], y.loc[tr])
+        oof, folds = oof_predict(X.loc[tr], y.loc[tr], params, table.fold.loc[tr], c["seed"], fit=fit)
         p = pd.DataFrame({f"fold{k}": m.predict(X) for k, m in folds.items()}, index=X.index)
         p["y_pred"] = final.predict(X)
         p.loc[tr, "y_pred"] = oof  # a train batch is predicted by the fold model that left it out
@@ -196,12 +199,12 @@ def run_cutoffs():
         p["spread_lo"], p["spread_hi"] = p.filter(like="fold").min(axis=1), p.filter(like="fold").max(axis=1)
         q = float((y.loc[tr] - oof).abs().quantile(c["pred_interval"]))
         p["y_pred_lo"], p["y_pred_hi"] = p.y_pred - q, p.y_pred + q
-        preds.append(p.assign(t_cut=h))
+        preds.append(p.assign(t_cut=h, model=name))
         tables.append(X.assign(t_cut=h))
         v = metrics(y.loc[va], final.predict(X.loc[va]))
         pv, yv = p.loc[va], y.loc[va]
         lower = cv.r2.mean() - 2 * cv.r2.std() / np.sqrt(len(cv))  # beats the mean beyond repeat noise
-        rows[f"{h:g}"] = {"t_cut": h, "cv_rmse": float(cv.rmse.mean()), "cv_rmse_sd": float(cv.rmse.std()),
+        rows[f"{h:g}"] = {"t_cut": h, "model": name, "cv_rmse": float(cv.rmse.mean()), "cv_rmse_sd": float(cv.rmse.std()),
                           "cv_r2": float(cv.r2.mean()), "cv_r2_lower": float(lower), "val_rmse": v["rmse"],
                           "val_r2": v["r2"], "provided": bool(lower > c["cutoff_min_cv_r2"]),
                           "interval_halfwidth": q, "val_coverage_interval": float(yv.between(pv.y_pred_lo, pv.y_pred_hi).mean()),
@@ -214,11 +217,11 @@ def run_cutoffs():
     pd.concat(preds).to_parquet(DATA / "cutoff_preds.parquet")
     write_json(ART / "cutoffs.json", rows)
     print(f"{'cutoff':>7}{'cv rmse':>10}{'sd':>6}{'cv r2':>8}{'-2se':>8}{'val rmse':>10}{'val r2':>8}"
-          f"{'+-range':>9}{'cover':>7}{'spread':>8}{'cover':>7}  provided")
+          f"{'+-range':>9}{'cover':>7}{'spread':>8}{'cover':>7}  provided  model")
     for k, r in rows.items():
         print(f"{k + ' h':>7}{r['cv_rmse']:10.0f}{r['cv_rmse_sd']:6.0f}{r['cv_r2']:8.3f}{r['cv_r2_lower']:8.3f}"
               f"{r['val_rmse']:10.0f}{r['val_r2']:8.3f}{r['interval_halfwidth']:9.0f}{r['val_coverage_interval']:7.0%}"
-              f"{r['spread_width_median']:8.0f}{r['val_coverage_spread']:7.0%}  {'yes' if r['provided'] else 'no'}")
+              f"{r['spread_width_median']:8.0f}{r['val_coverage_spread']:7.0%}  {'yes' if r['provided'] else 'no':<10}{r['model']}")
 
 
 def run_forecast():

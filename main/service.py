@@ -190,11 +190,12 @@ def _batch(batch_id, t=None):
 def pred_trend(batch_id, t=None):
     """Yield prediction of every provided cutoff model reached by t (OOF for train), with two ranges:
     y_pred_lo/hi = +- the 80% quantile of train OOF |error| (covers ~80-90% on val; show this one) and
-    spread_lo/hi = min/max of the 5 fold models ("model spread": covers far less, not an error range)."""
+    spread_lo/hi = min/max of the 5 fold models ("model spread": covers far less, not an error range).
+    model: "ridge_clip" (early estimate, before t_cut) or "xgboost"."""
     tr = _state()["trend"]
     tr = tr[(tr.index == batch_id) & ((tr.t_cut <= t + 1e-9) if t is not None else True)]
     cols = ["t_cut", "y_pred", "y_pred_lo", "y_pred_hi", "spread_lo", "spread_hi"]
-    return [{k: float(v) for k, v in zip(cols, r)} for r in tr[cols].itertuples(index=False)]
+    return [{k: float(v) for k, v in zip(cols, r)} | {"model": m} for r, m in zip(tr[cols].itertuples(index=False), tr.model)]
 
 
 def _status(batch_id, now):

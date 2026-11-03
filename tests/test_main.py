@@ -241,8 +241,8 @@ def test_api_matches_mockup_contract(s):
     assert {x["state"] for x in d["series"]} <= {"normal", "caution", "anomaly"}
     seg = d["segments"]
     assert seg[0]["start"] == d["series"][0]["t"] and all(a["end"] == b["start"] for a, b in zip(seg, seg[1:]))
-    t_cut = s["split"]["t_cut"]
-    assert all((x["predictedFinal"] is None) == (x["t"] < t_cut) for x in d["series"])
+    first = _first_provided()
+    assert all((x["predictedFinal"] is None) == (x["t"] < first) for x in d["series"])
     assert c.get(f"/batches/{bid}/shap?t=50").json() == []  # no yield prediction before t_cut
     sh = c.get(f"/batches/{bid}/shap?t=150").json()
     assert len(sh) == 5 and set(sh[0]) == {"feature", "label", "value"}
@@ -338,17 +338,22 @@ def test_replay_has_no_future(t0, monkeypatch):
         assert views() == base
         d = json.loads(base)[0]
         assert d["runStatus"] == "running" and d["finalMeasured"] is None and d["plannedEndH"] is None
-        assert max(x["t"] for x in d["series"]) <= t0 and (d["predictedFinal"] is None) == (t0 < 115)
+        assert max(x["t"] for x in d["series"]) <= t0 and (d["predictedFinal"] is None) == (t0 < _first_provided())
     finally:
         for f in (service.events, service.explanation):
             f.cache_clear()
+
+
+def _first_provided():
+    """Hour of the earliest cutoff whose yield prediction is shown."""
+    return min(r["t_cut"] for r in read_json(ART / "cutoffs.json").values() if r["provided"])
 
 
 def test_replay_api():
     from fastapi.testclient import TestClient
     from main.api import app
     c = TestClient(app)
-    rows = c.get("/batches?t=100").json()
+    rows = c.get(f"/batches?t={_first_provided() - 10:g}").json()
     assert {r["runStatus"] for r in rows} == {"running"} and all(r["predictedFinal"] is None for r in rows)
     assert c.get("/batches/92?t=0.1").status_code == 422 and c.get("/batches/92/contrib").status_code == 422
     r = c.get("/batches/92/contrib?t=150").json()
@@ -374,6 +379,8 @@ def test_pred_trend(s):
     cut = read_json(ART / "cutoffs.json")
     shown = [r["provided"] for r in cut.values()]
     assert shown == sorted(shown)  # once provided, every later cutoff is provided too
+    t_cut = s["split"]["t_cut"]
+    assert all(r["model"] == ("ridge_clip" if r["t_cut"] < t_cut else "xgboost") for r in cut.values())
     bid, t_cut = s["split"]["val"][0], s["split"]["t_cut"]
     trend = service.pred_trend(bid)
     first = {p["t_cut"]: p["y_pred"] for p in trend}

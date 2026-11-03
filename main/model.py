@@ -2,6 +2,7 @@
 import numpy as np
 import pandas as pd
 import xgboost as xgb
+from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.compose import ColumnTransformer
 from sklearn.dummy import DummyRegressor
 from sklearn.linear_model import LinearRegression, RidgeCV
@@ -49,14 +50,16 @@ def cv_rmse(X, y, params, seeds, n_splits=5):
     return float(np.mean(s))
 
 
-def repeated_cv(X, y, params, seed, n_rep=10, n_splits=5):
+def repeated_cv(X, y, params, seed, n_rep=10, n_splits=5, fit=None):
     """OOF metrics of shuffled k-fold, repeated n_rep times (one row per repeat). With 60 train batches a
-    single split is noisy; compare settings on the mean and spread of these rows."""
+    single split is noisy; compare settings on the mean and spread of these rows. fit(X, y) -> model,
+    default XGBoost with params."""
+    fit = fit or (lambda X, y: make_xgb(params, seed).fit(X, y))
     out = []
     for r in range(n_rep):
         oof = pd.Series(np.nan, index=X.index)
         for a, b in KFold(n_splits, shuffle=True, random_state=seed + r).split(X):
-            oof.iloc[b] = make_xgb(params, seed).fit(X.iloc[a], y.iloc[a]).predict(X.iloc[b])
+            oof.iloc[b] = fit(X.iloc[a], y.iloc[a]).predict(X.iloc[b])
         out.append(metrics(y, oof))
     return pd.DataFrame(out)
 
@@ -86,12 +89,31 @@ def baselines(X, y):
     }
 
 
-def oof_predict(X, y, params, fold, seed):
+class Clip(BaseEstimator, TransformerMixin):
+    """Clip each feature to its [q, 1 - q] training quantiles."""
+    def __init__(self, q=0.01):
+        self.q = q
+
+    def fit(self, X, y=None):
+        self.lo_, self.hi_ = X.quantile(self.q), X.quantile(1 - self.q)
+        return self
+
+    def transform(self, X):
+        return X.clip(self.lo_, self.hi_, axis=1)
+
+
+def fit_ridge_clip(X, y):
+    """The ridge baseline with features clipped to the training range (guards against far-out batches)."""
+    return make_pipeline(Clip(), StandardScaler(), RidgeCV(alphas=np.logspace(-2, 4, 40))).fit(X, y)
+
+
+def oof_predict(X, y, params, fold, seed, fit=None):
     """fold k model (trained on the other folds) predicts fold k. Returns predictions and the models."""
+    fit = fit or (lambda X, y: make_xgb(params, seed).fit(X, y))
     pred, models = pd.Series(np.nan, index=X.index), {}
     for k in sorted(fold.unique()):
         te = fold == k
-        models[int(k)] = make_xgb(params, seed).fit(X[~te], y[~te])
+        models[int(k)] = fit(X[~te], y[~te])
         pred[te] = models[int(k)].predict(X[te])
     return pred, models
 
