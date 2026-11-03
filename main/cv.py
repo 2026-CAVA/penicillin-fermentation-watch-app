@@ -9,7 +9,11 @@ import time
 
 import numpy as np
 import pandas as pd
+from sklearn.compose import ColumnTransformer
+from sklearn.linear_model import RidgeCV
 from sklearn.model_selection import StratifiedKFold
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import SplineTransformer
 
 from main import forecast as fc
 from main.data import (ART, DATA, DT, batch_meta, batch_yield_kg, build_batch_table, cfg, load_ts, offline_available,
@@ -23,23 +27,35 @@ def _parts(ids, groups, n, seed):
     return [(ids[a], ids[b]) for a, b in skf.split(ids, groups)]
 
 
-def _yield(tables, y, train, ev, inner, params, seed, q_level):
-    """Per cutoff: XGBoost and baselines fit on train, predictions for ev, XGBoost 80% range (inner OOF |error|)
-    and model spread (inner fold models)."""
+def fit_spline(X, y, s):
+    """Additive spline ridge on the top_k |corr| features of (X, y) plus the slider inputs (kept so What-if
+    still moves); each feature is flat outside its training range."""
+    sliders = list(cfg()["sliders"])
+    top = X.drop(columns=sliders).corrwith(y).abs().nlargest(s["top_k"]).index
+    return make_pipeline(ColumnTransformer([("x", "passthrough", [*top, *sliders])]),
+                         SplineTransformer(n_knots=s["n_knots"], degree=s["degree"]),
+                         RidgeCV(alphas=np.logspace(-2, 4, 40))).fit(X, y)
+
+
+def _yield(tables, y, train, ev, inner, params, seed, q_level, spline):
+    """Per cutoff: XGBoost, spline ridge and baselines fit on train, predictions for ev, 80% range (inner OOF
+    |error|) and model spread (inner fold models) for XGBoost and spline ridge."""
+    fits = {"xgboost": lambda X, y: make_xgb(params, seed).fit(X, y), "spline": lambda X, y: fit_spline(X, y, spline)}
     rows = []
     for h, X in tables.items():
         Xt, yt = X.loc[train], y.loc[train]
-        oof, spread = pd.Series(np.nan, index=train), []
-        for k in sorted(set(inner.values())):
-            out = np.array([inner[b] == k for b in train])
-            m = make_xgb(params, seed).fit(Xt[~out], yt[~out])
-            oof[out] = m.predict(Xt[out])
-            spread.append(m.predict(X.loc[ev]))
-        q = float((yt - oof).abs().quantile(q_level))
-        p = make_xgb(params, seed).fit(Xt, yt).predict(X.loc[ev])
-        spread = np.array(spread)
-        rows.append(pd.DataFrame({"batch": ev, "t_cut": h, "model": "xgboost", "pred": p, "lo": p - q, "hi": p + q,
-                                  "spread_lo": spread.min(axis=0), "spread_hi": spread.max(axis=0)}))
+        for name, fit in fits.items():
+            oof, spread = pd.Series(np.nan, index=train), []
+            for k in sorted(set(inner.values())):
+                out = np.array([inner[b] == k for b in train])
+                m = fit(Xt[~out], yt[~out])
+                oof[out] = m.predict(Xt[out])
+                spread.append(m.predict(X.loc[ev]))
+            q = float((yt - oof).abs().quantile(q_level))
+            p = fit(Xt, yt).predict(X.loc[ev])
+            spread = np.array(spread)
+            rows.append(pd.DataFrame({"batch": ev, "t_cut": h, "model": name, "pred": p, "lo": p - q, "hi": p + q,
+                                      "spread_lo": spread.min(axis=0), "spread_hi": spread.max(axis=0)}))
         for name, m in baselines(Xt, yt).items():
             rows.append(pd.DataFrame({"batch": ev, "t_cut": h, "model": f"baseline_{name}",
                                       "pred": m.predict(X.loc[ev])}))
@@ -95,7 +111,7 @@ def run_cv():
                                "fault_detected": m["batch_detection"] * len(faults), "n_fault": len(faults),
                                "delay_h_median": m["lead_time_h_median"]})
             tables = {h: build_batch_table(rt, risk, meta, h, c["features"]) for h in hours}
-            preds.append(_yield(tables, y, train, ev + faults, inner, params, c["seed"], c["pred_interval"])
+            preds.append(_yield(tables, y, train, ev + faults, inner, params, c["seed"], c["pred_interval"], v["spline"])
                          .assign(repeat=r, k=j))
             if r < v["forecast_repeats"]:
                 fcast.append(_forecast(R, train, {"normal": ev, "fault": faults}, inner, c["forecast"], c["seed"])
@@ -135,7 +151,7 @@ def summarize(alarms, preds, fcast, y, faults):
                 e = e.groupby("batch")[["pred", "lo", "hi", "spread_lo", "spread_hi"]].mean()
                 yy = y.loc[e.index]
                 row = metrics(yy, e.pred)
-                if model == "xgboost":
+                if e.lo.notna().all():  # models with an 80% range
                     row |= {"coverage_range": float(yy.between(e.lo, e.hi).mean()),
                             "coverage_spread": float(yy.between(e.spread_lo, e.spread_hi).mean())}
                 per.append(row)
