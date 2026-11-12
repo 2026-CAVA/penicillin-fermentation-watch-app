@@ -1,18 +1,18 @@
-"""PCA T²/SPE multivariate anomaly detection on the online sensor variables.
+"""온라인 센서 변수에 대한 PCA T²/SPE 다변량 이상 탐지.
 
-Fit on training batch time points (standardized). At each time point:
-  T²  = sum_i (score_i² / λ_i)  — distance from origin in PC space (mean shift)
-  SPE = ||x - x̂||²              — residual not explained by the PCs (novel pattern)
-Control limits = empirical α-quantile over training data.
+학습 배치의 각 시점 데이터를 표준화 후 PCA 훈련. 시점마다 계산:
+  T²  = sum_i (score_i² / λ_i)  — PC 공간에서의 거리 (평균 이탈 감지)
+  SPE = ||x - x̂||²              — PCA로 설명 안 되는 잔차 (기존에 없던 패턴 감지)
+관리 한계선 = 학습 데이터의 경험적 α 분위수.
 """
 import numpy as np
 from sklearn.decomposition import PCA
 
 
 def fit_pca(ts, train_batches, vars, n_components=0.95, alpha=0.95):
-    """Fit PCA on the online variables of train_batches.
-    n_components: float in (0,1) = minimum variance to retain, or int = fixed count.
-    alpha: quantile for T² and SPE control limits derived from training data."""
+    """학습 배치의 온라인 변수로 PCA 훈련.
+    n_components: (0,1) 실수 = 보존할 최소 분산 비율, 정수 = PC 개수 고정.
+    alpha: 학습 데이터 기반 T²/SPE 관리 한계선 분위수."""
     X = ts[ts.batch.isin(train_batches)][vars].to_numpy(float)
     mean = X.mean(axis=0)
     scale = X.std(axis=0)
@@ -35,7 +35,7 @@ def fit_pca(ts, train_batches, vars, n_components=0.95, alpha=0.95):
 
 
 def pca_scores(state, ts_batch):
-    """T² and SPE per time point (NaN where any variable is missing)."""
+    """시점마다 T²와 SPE 계산 (변수값이 하나라도 없으면 NaN)."""
     X = ts_batch[state["vars"].tolist()].to_numpy(float)
     Z = (X - state["mean"]) / state["scale"]
     scores = Z @ state["components"].T

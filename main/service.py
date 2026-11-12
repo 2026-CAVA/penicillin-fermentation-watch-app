@@ -456,8 +456,8 @@ def forecast(batch_id, t):
 # --- optimisation (P8) -----------------------------------------------------------------------------
 
 def pca_anomaly(batch_id, t=None):
-    """T² and SPE per time point, with training-data control limits.
-    Requires `python -m main pca` to have been run first."""
+    """시점마다 T²/SPE와 학습 데이터 기반 관리 한계선 반환.
+    `python -m main pca` 실행 후 사용 가능."""
     s = _state()
     if s["pca"] is None:
         raise ValueError("PCA model not found; run `python -m main pca` first")

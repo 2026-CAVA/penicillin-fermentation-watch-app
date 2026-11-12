@@ -429,9 +429,9 @@ def run_test():
 
 
 def run_pca():
-    """PCA T²/SPE model for the online variables: fit on train batches, save to artifacts/pca.npz.
-    Run after `warning` (needs timeseries.parquet and split.json).
-    Endpoint: GET /batches/{id}/pca?t="""
+    """온라인 변수 PCA T²/SPE 모델: 학습 배치로 훈련 후 artifacts/pca.npz 저장.
+    `warning` 스텝 이후 실행 (timeseries.parquet, split.json 필요).
+    엔드포인트: GET /batches/{id}/pca?t="""
     from main.pca import fit_pca, save_pca
     ts, split = load_ts(), load_split()
     state = fit_pca(ts, split["train"], names("input", "online"))

@@ -9,7 +9,7 @@
     GET  /batches/{id}/events?all=&t= excursions per variable (>= 1 h) during alarms; all=true for every one
     GET  /compare?ids=6,92&vars=DO,pH   batches side by side (one id: a reference batch is added)
     GET  /batches/{id}/forecast?t= penicillin concentration t .. t + 8 h with an 80% range
-    GET  /batches/{id}/pca?t=      T² and SPE time series with 95% control limits (needs `python -m main pca`)
+    GET  /batches/{id}/pca?t=      T²/SPE 시계열 + 95% 관리 한계선 (사전에 `python -m main pca` 실행 필요)
     POST /batches/{id}/optimize    {"max_change": 0.2} (optional) -> best slider settings (reference only)
     GET  /model                    model, target, repeated-CV metrics, alarm rule, demo batches
 """
