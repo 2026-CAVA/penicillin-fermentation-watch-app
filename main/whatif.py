@@ -75,6 +75,33 @@ def rule_whatif_by_var(ts_batch, ranges, cuts, persist=1):
     return df.sort_values("reduction", ascending=False, ignore_index=True)
 
 
+def grid_search(model, x_row, feature1, feature2, bounds, n=10, max_change=0.2, coupled=COUPLED):
+    """n×n grid over feature1 x feature2 within +-max_change of current values (clipped to train bounds).
+    Other features and coupled variables adjust as in whatif_predict."""
+    def narrow(f):
+        cur = float(x_row[f])
+        lo, hi = bounds[f]
+        return max(lo, cur * (1 - max_change)), min(hi, cur * (1 + max_change))
+
+    g1 = np.linspace(*narrow(feature1), n)
+    g2 = np.linspace(*narrow(feature2), n)
+    rows = []
+    for v1 in g1:
+        for v2 in g2:
+            x = x_row.astype(float).copy()
+            x[feature1] = v1
+            x[feature2] = v2
+            for g, k in _linked(x_row, feature1, coupled).items():
+                x[g] += k * (v1 - float(x_row[feature1]))
+            for g, k in _linked(x_row, feature2, coupled).items():
+                x[g] += k * (v2 - float(x_row[feature2]))
+            rows.append(_frame(x))
+    preds = model.predict(pd.concat(rows, ignore_index=True)).astype(float).tolist()
+    return {"feature1": feature1, "x1": g1.tolist(),
+            "feature2": feature2, "x2": g2.tolist(),
+            "y": [preds[i * n:(i + 1) * n] for i in range(n)]}
+
+
 def optimize(models, x_row, bounds, max_change, penalty=1.0, n=2000, seed=0):
     """Random search over the sliders inside the train range and +-max_change of the current values.
     Score = mean - penalty x std over `models` (the fold models), so conditions the models disagree on lose.

@@ -112,3 +112,28 @@ def simulate(req: Simulate):
         return service.run_whatif(req.batch_id, req.changes)
     except ValueError as e:
         raise HTTPException(422, str(e))
+
+
+@app.get("/batches/{batch_id}/curve")
+def curve(batch_id: int, feature: str):
+    _known(batch_id)
+    s = service._state()
+    if feature not in s["bounds"]:
+        raise HTTPException(422, f"not a slider feature: {feature}")
+    model, _, _ = service._route(batch_id)
+    from main.whatif import response_curve
+    return response_curve(model, s["X"].loc[batch_id], feature, s["bounds"])
+
+
+@app.get("/batches/{batch_id}/grid")
+def grid(batch_id: int, feature1: str, feature2: str):
+    _known(batch_id)
+    s = service._state()
+    for f in (feature1, feature2):
+        if f not in s["bounds"]:
+            raise HTTPException(422, f"not a slider feature: {f}")
+    if feature1 == feature2:
+        raise HTTPException(422, "feature1 and feature2 must differ")
+    model, _, _ = service._route(batch_id)
+    from main.whatif import grid_search
+    return grid_search(model, s["X"].loc[batch_id], feature1, feature2, s["bounds"])
