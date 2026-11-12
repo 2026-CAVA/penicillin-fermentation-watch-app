@@ -428,6 +428,20 @@ def run_test():
         print(f"  {'PASS' if ok else 'FAIL'}  {name}: {shown}")
 
 
+def run_pca():
+    """PCA T²/SPE model for the online variables: fit on train batches, save to artifacts/pca.npz.
+    Run after `warning` (needs timeseries.parquet and split.json).
+    Endpoint: GET /batches/{id}/pca?t="""
+    from main.pca import fit_pca, save_pca
+    ts, split = load_ts(), load_split()
+    state = fit_pca(ts, split["train"], names("input", "online"))
+    save_pca(ART / "pca.npz", state)
+    nc, evr = state["n_components"], state["explained_variance_ratio"]
+    print(f"{nc} PCs explain {evr:.1%} of variance; "
+          f"T² limit {state['T2_limit']:.2f}, SPE limit {state['SPE_limit']:.2f} "
+          f"(alpha={state['alpha']:.0%}, {len(split['train'])} train batches x {len(state['vars'])} vars)")
+
+
 def run_serve():
     """HTTP API for the front end (main.api)."""
     import uvicorn
@@ -436,7 +450,7 @@ def run_serve():
 
 STEPS = {"prepare": run_prepare, "check": run_check, "warning": run_warning, "quality": run_quality,
          "cutoffs": run_cutoffs, "forecast": run_forecast, "explain": run_explain, "test": run_test,
-         "cv": run_cv, "serve": run_serve}
+         "cv": run_cv, "pca": run_pca, "serve": run_serve}
 ALL = ["prepare", "warning", "quality", "cutoffs", "forecast", "explain", "cv"]
 
 def run_predict(argv):

@@ -9,6 +9,7 @@
     GET  /batches/{id}/events?all=&t= excursions per variable (>= 1 h) during alarms; all=true for every one
     GET  /compare?ids=6,92&vars=DO,pH   batches side by side (one id: a reference batch is added)
     GET  /batches/{id}/forecast?t= penicillin concentration t .. t + 8 h with an 80% range
+    GET  /batches/{id}/pca?t=      T² and SPE time series with 95% control limits (needs `python -m main pca`)
     POST /batches/{id}/optimize    {"max_change": 0.2} (optional) -> best slider settings (reference only)
     GET  /model                    model, target, repeated-CV metrics, alarm rule, demo batches
 """
@@ -112,6 +113,12 @@ def simulate(req: Simulate):
         return service.run_whatif(req.batch_id, req.changes)
     except ValueError as e:
         raise HTTPException(422, str(e))
+
+
+@app.get("/batches/{batch_id}/pca")
+def pca_anomaly(batch_id: int, t: float | None = None):
+    _known(batch_id)
+    return _call(service.pca_anomaly, batch_id, t)
 
 
 @app.get("/batches/{batch_id}/curve")

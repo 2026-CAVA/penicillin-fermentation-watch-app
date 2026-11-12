@@ -21,6 +21,7 @@ from main.data import ART, DATA, DT, cfg, col_meta, feature_label, load_split, l
 from main.model import load_xgb, shap_values, top_k_drivers
 from main.predict import forecast_path
 from main.warning import GRADES, band_at, deviation, load_bands, range_sign, risk_contrib, runs
+from main.pca import load_pca, pca_scores
 from main.whatif import optimize as optimize_sliders
 from main.whatif import response_curve, rule_whatif, rule_whatif_by_var, whatif_predict
 
@@ -41,7 +42,8 @@ def _state():
             "rules": read_json(ART / "rules.json"), "bounds": slider_bounds(X.loc[split["train"]], cfg()["sliders"]),
             "trend": _provided(pd.read_parquet(DATA / "cutoff_preds.parquet"), read_json(ART / "cutoffs.json")),
             "early": (_provided(pd.read_parquet(DATA / "cutoff_contrib.parquet"), read_json(ART / "cutoffs.json")),
-                      pd.read_parquet(DATA / "cutoff_features.parquet"))}
+                      pd.read_parquet(DATA / "cutoff_features.parquet")),
+            "pca": load_pca(ART / "pca.npz") if (ART / "pca.npz").exists() else None}
 
 
 def _provided(preds, cutoffs):
@@ -452,6 +454,22 @@ def forecast(batch_id, t):
 
 
 # --- optimisation (P8) -----------------------------------------------------------------------------
+
+def pca_anomaly(batch_id, t=None):
+    """T² and SPE per time point, with training-data control limits.
+    Requires `python -m main pca` to have been run first."""
+    s = _state()
+    if s["pca"] is None:
+        raise ValueError("PCA model not found; run `python -m main pca` first")
+    ts, _ = _batch(batch_id, t)
+    T2, SPE = pca_scores(s["pca"], ts)
+    pca = s["pca"]
+    return {"t": ts.t.tolist(), "T2": _lst(T2), "SPE": _lst(SPE),
+            "T2_limit": pca["T2_limit"], "SPE_limit": pca["SPE_limit"],
+            "n_components": pca["n_components"],
+            "explained_variance_ratio": pca["explained_variance_ratio"],
+            "vars": pca["vars"], "alpha": pca["alpha"]}
+
 
 def optimize(batch_id, max_change=None):
     """Slider settings with the highest predicted yield near this batch's own (train range, +-max_change),
