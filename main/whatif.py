@@ -40,8 +40,8 @@ def whatif_predict(model, x_row, changes, bounds, coupled=COUPLED):
 
 
 def response_curve(model, x_row, feature, bounds, n=25, coupled=COUPLED):
-    """This batch's prediction over the feature's train range, others held (shows the step shape).
-    Linked features (coupled) move with the slider, as in whatif_predict."""
+    """해당 변수의 학습 전체 범위에서 이 배치의 수율 예측값 변화 (나머지 고정).
+    coupled 변수는 whatif_predict와 동일하게 슬라이더에 연동."""
     grid = np.linspace(*bounds[feature], n)
     X = pd.concat([_frame(x_row)] * n, ignore_index=True)
     X[feature] = grid
@@ -76,8 +76,8 @@ def rule_whatif_by_var(ts_batch, ranges, cuts, persist=1):
 
 
 def grid_search(model, x_row, feature1, feature2, bounds, n=10, max_change=0.2, coupled=COUPLED):
-    """n×n grid over feature1 x feature2 within +-max_change of current values (clipped to train bounds).
-    Other features and coupled variables adjust as in whatif_predict."""
+    """feature1 x feature2 n×n 격자 탐색 (현재값 ±max_change 범위, 학습 범위 내로 클리핑).
+    나머지 변수와 coupled 변수는 whatif_predict와 동일하게 연동."""
     def narrow(f):
         cur = float(x_row[f])
         lo, hi = bounds[f]
