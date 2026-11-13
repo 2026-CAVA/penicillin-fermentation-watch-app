@@ -499,3 +499,14 @@ def test_predict_new_run_matches_service(s, t0, tmp_path):
     assert [p["p"] for p in r["forecast"]["path"]] == pytest.approx([p["p"] for p in f["path"]], rel=1e-5)
     with pytest.raises(ValueError, match="missing columns"):
         predict(ts.drop(columns="DO"), group)
+
+
+def test_pca_fit_on_real_data(s):
+    """Late time steps with < min_n train batches and all-zero-std variables must not break the fit."""
+    from main.pca import fit_pca, pca_scores
+    v = names("input", "online")
+    st = fit_pca(s["ts"], s["split"]["train"], v)
+    T2, SPE = pca_scores(st, s["ts"][s["ts"].batch == 92])
+    assert np.isfinite(T2).any() and np.isfinite(SPE).any()
+    sparse = s["ts"][s["ts"].batch.isin(s["split"]["train"])].groupby("k").size().pipe(lambda n: n[n < 10].index)
+    assert not np.isin(st["k_index"], sparse).any()  # those steps get NaN, not a 1-batch std

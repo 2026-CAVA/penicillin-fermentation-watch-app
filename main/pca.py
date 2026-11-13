@@ -11,17 +11,21 @@ import pandas as pd
 from sklearn.decomposition import PCA
 
 
-def fit_pca(ts, train_batches, vars, n_components=0.95, alpha=0.95, std_floor_q=0.1):
+def fit_pca(ts, train_batches, vars, n_components=0.95, alpha=0.95, std_floor_q=0.1, min_n=10):
     """학습 배치의 온라인 변수로 PCA 훈련 (시점 k별 표준화).
     n_components: (0,1) 실수 = 보존할 최소 분산 비율, 정수 = PC 개수 고정.
     alpha: 학습 데이터 기반 T²/SPE 관리 한계선 분위수.
-    std_floor_q: 거의 상수인 변수의 std 하한선 분위수 (band 모델과 동일)."""
+    std_floor_q: 거의 상수인 변수의 std 하한선 분위수 (band 모델과 동일).
+    min_n: 학습 배치가 이보다 적은 시점은 제외 (band 모델과 동일, 이 시점은 NaN)."""
     tr = ts[ts.batch.isin(train_batches)]
     g = tr.groupby("k")[vars]
-    mean_k = g.mean()
-    std_k = g.std()
+    enough = g.size() >= min_n  # 늦은 시점은 배치가 1개뿐이라 std가 NaN
+    mean_k = g.mean()[enough]
+    std_k = g.std()[enough]
     # 거의 상수인 변수(pH, RPM 등)는 std가 0에 가까워 표준화가 불안정 → 하한선 적용
     std_k = std_k.clip(lower=std_k.where(std_k > 0).quantile(std_floor_q), axis=1)
+    # 모든 시점에서 std가 0인 변수(Fg, pressure 등 레시피 고정값)는 하한도 NaN → 1 (편차를 원 단위로)
+    std_k = std_k.fillna(1.0).replace(0.0, 1.0)
     k_index = mean_k.index.to_numpy()
 
     # 각 행의 k에 맞는 mean/std로 표준화 (학습 범위 밖 k는 제외)
@@ -50,7 +54,7 @@ def fit_pca(ts, train_batches, vars, n_components=0.95, alpha=0.95, std_floor_q=
 
 def pca_scores(state, ts_batch):
     """시점마다 T²와 SPE 계산 (학습 데이터에 없는 시점이거나 변수값이 없으면 NaN)."""
-    vars = state["vars"].tolist()
+    vars = list(state["vars"])  # fit_pca는 ndarray, load_pca는 list
     pos = pd.Index(state["k_index"]).get_indexer(ts_batch["k"])
     ok = pos >= 0
 
