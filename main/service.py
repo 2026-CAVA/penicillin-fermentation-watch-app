@@ -23,7 +23,7 @@ from main.predict import forecast_path
 from main.warning import GRADES, band_at, deviation, load_bands, range_sign, risk_contrib, runs
 from main.pca import load_pca, pca_scores
 from main.whatif import optimize as optimize_sliders
-from main.whatif import response_curve, rule_whatif, rule_whatif_by_var, whatif_predict
+from main.whatif import grid_search, response_curve, rule_whatif, rule_whatif_by_var, whatif_predict
 
 TAGS = {"train": "Train batch - predicted by the model trained without this batch",
         "val": "Validation batch - used for model selection and alarm thresholds",
@@ -152,6 +152,71 @@ def batch_view(batch_id, t=None):
                          "may remain critical when only one variable is fixed.",
         },
     }
+
+
+def _sliders_ready(batch_id, t, features):
+    """Sliders are built from 0..t_cut, so (as in batch_view) they exist only once the replay reaches t_cut."""
+    s = _state()
+    if t is not None and _batch(batch_id, t)[0].t.iloc[-1] < s["split"]["t_cut"]:
+        raise ValueError(f"what-if is available from t = {s['split']['t_cut']:g} h (got t = {t:g})")
+    unknown = [f for f in features if f not in s["bounds"]]
+    if unknown:
+        raise ValueError(f"not a slider feature: {unknown}")
+    return _route(batch_id)[0], s["X"].loc[batch_id], s["bounds"]
+
+
+def run_x(x):
+    """An uploaded run's feature row at t_cut (predict()["whatif_x"]) as a Series in model column order."""
+    cols = _state()["X"].columns
+    missing = [c for c in cols if c not in (x or {})]
+    if missing:
+        raise ValueError(f"whatif_x is missing features: {missing[:5]}")
+    return pd.Series({c: np.nan if x[c] is None else float(x[c]) for c in cols}, name="run")
+
+
+def _check_sliders(features):
+    unknown = [f for f in features if f not in _state()["bounds"]]
+    if unknown:
+        raise ValueError(f"not a slider feature: {unknown}")
+
+
+def run_sliders(x):
+    """Sliders for an uploaded run: same features and train ranges as batch_view, this run's values."""
+    xs = run_x(x)
+    return [{"feature": f, "label": cfg()["sliders"][f], "value": float(xs[f]), "min": lo, "max": hi}
+            for f, (lo, hi) in _state()["bounds"].items()]
+
+
+def run_whatif_x(x, changes):
+    _check_sliders(list(changes))
+    r = whatif_predict(_state()["final"], run_x(x), changes, _state()["bounds"])
+    return {"pred_source": "final", **r, "top3": [{**d, "label": feature_label(d["feature"])} for d in r["top3"]]}
+
+
+def curve_x(x, feature):
+    _check_sliders([feature])
+    return response_curve(_state()["final"], run_x(x), feature, _state()["bounds"])
+
+
+def grid_x(x, feature1, feature2):
+    if feature1 == feature2:
+        raise ValueError("feature1 and feature2 must differ")
+    _check_sliders([feature1, feature2])
+    return grid_search(_state()["final"], run_x(x), feature1, feature2, _state()["bounds"])
+
+
+def curve(batch_id, feature, t=None):
+    """GET /batches/{id}/curve: the same curve as batch_view's whatif.sliders[].curve, for one feature."""
+    model, x, bounds = _sliders_ready(batch_id, t, [feature])
+    return response_curve(model, x, feature, bounds)
+
+
+def grid(batch_id, feature1, feature2, t=None):
+    """GET /batches/{id}/grid: n x n predictions over two sliders (whatif.grid_search)."""
+    if feature1 == feature2:
+        raise ValueError("feature1 and feature2 must differ")
+    model, x, bounds = _sliders_ready(batch_id, t, [feature1, feature2])
+    return grid_search(model, x, feature1, feature2, bounds)
 
 
 def run_whatif(batch_id, changes):
@@ -474,11 +539,20 @@ def pca_anomaly(batch_id, t=None):
 def optimize(batch_id, max_change=None):
     """Slider settings with the highest predicted yield near this batch's own (train range, +-max_change),
     scored as the fold models' mean minus their spread. Reference only: patterns, not causes."""
+    return _optimize(_state()["X"].loc[batch_id], max_change)
+
+
+def optimize_x(x, max_change=None):
+    """optimize() for an uploaded run's feature row (POST /runs/optimize)."""
+    return _optimize(run_x(x), max_change)
+
+
+def _optimize(x_row, max_change):
     s, o = _state(), cfg()["optimize"]
     mc = o["max_change"] if max_change is None else max_change
     if not 0 < mc <= 1:
         raise ValueError("max_change must be in (0, 1]")
-    r = optimize_sliders(list(s["folds"].values()), s["X"].loc[batch_id], s["bounds"], mc, o["penalty"],
+    r = optimize_sliders(list(s["folds"].values()), x_row, s["bounds"], mc, o["penalty"],
                          o["n_samples"], cfg()["seed"])
     half = read_json(ART / "cutoffs.json")[f"{s['split']['t_cut']:g}"]["interval_halfwidth"]
     return {**r, "max_change": mc, "labels": {f: cfg()["sliders"][f] for f in r["best"]},

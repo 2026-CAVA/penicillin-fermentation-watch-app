@@ -8,6 +8,7 @@ import pytest
 
 from main import __main__ as pipeline
 from main import service
+ROOT_DEMO_RUN = __import__("pathlib").Path(__file__).parents[1] / "demo" / "run.csv"
 from main.data import (ART, DATA, META, batch_meta, build_batch_table, cfg, load_split, load_ts, names,
                        offline_available, read_json)
 from main.model import load_xgb, oof_predict, shap_values
@@ -421,6 +422,15 @@ def test_forecast_api(s):
     assert all(p["lo"] < p["p"] < p["hi"] for p in r["path"])
 
 
+def test_view_api(s):
+    from fastapi.testclient import TestClient
+    from main.api import app
+    bid = s["split"]["train"][0]
+    v = TestClient(app).get(f"/batches/{bid}/view?t=150").json()
+    assert v["t_now"] == 150 and v["running"] and len(v["t"]) == len(v["series"]["DO"]["band_lo"])
+    assert all(sl["min"] < sl["max"] for sl in v["whatif"]["sliders"])
+
+
 def test_optimize(s):
     from fastapi.testclient import TestClient
     from main.api import app
@@ -510,3 +520,59 @@ def test_pca_fit_on_real_data(s):
     assert np.isfinite(T2).any() and np.isfinite(SPE).any()
     sparse = s["ts"][s["ts"].batch.isin(s["split"]["train"])].groupby("k").size().pipe(lambda n: n[n < 10].index)
     assert not np.isin(st["k_index"], sparse).any()  # those steps get NaN, not a 1-batch std
+
+
+def test_curve_grid_respect_replay_time(s):
+    """Sliders come from 0..t_cut: before t_cut (replay) /curve and /grid refuse, after it they answer."""
+    from fastapi.testclient import TestClient
+    from main.api import app
+    c, t_cut = TestClient(app), s["split"]["t_cut"]
+    f1, f2 = list(service._state()["bounds"])[:2]
+    assert c.get(f"/batches/92/curve?feature={f1}&t={t_cut - 10}").status_code == 422
+    assert c.get(f"/batches/92/grid?feature1={f1}&feature2={f2}&t={t_cut - 10}").status_code == 422
+    r = c.get(f"/batches/92/curve?feature={f1}&t={t_cut}")
+    assert r.status_code == 200 and r.json() == c.get(f"/batches/92/curve?feature={f1}").json()
+    g = c.get(f"/batches/92/grid?feature1={f1}&feature2={f2}&t={t_cut + 5}").json()
+    assert len(g["y"]) == len(g["x1"]) and len(g["y"][0]) == len(g["x2"])
+
+
+def test_run_upload_normalizes(tmp_path):
+    """POST /runs/predict: raw IndPenSim headers and an hourly log land on the 0.2 h grid like the original run."""
+    from fastapi.testclient import TestClient
+    from main.api import app
+    c, df = TestClient(app), pd.read_csv(ROOT_DEMO_RUN)
+    src = {col["name"]: col["src"] for col in cfg()["columns"] if "src" in col}
+    hourly = df[np.isclose(df.t % 1, 0) | (df.t < 0.3)].rename(columns=src)
+    a = c.post("/runs/predict", content=df.to_csv(index=False)).json()
+    b = c.post("/runs/predict", content=hourly.to_csv(index=False)).json()
+    assert len(b["series"]["t"]) == len(a["series"]["t"]) and b["series"]["t"][1] == pytest.approx(0.4)
+    assert abs(b["yield"]["y_pred"] - a["yield"]["y_pred"]) < 0.05 * a["yield"]["y_pred"]
+    assert c.post("/runs/predict", content="x,y\n1,2").status_code == 422
+
+
+def test_run_upload_several_batches():
+    """POST /runs/predict-batches splits by Batch ref; a broken run is reported on its own, not failing the rest."""
+    from fastapi.testclient import TestClient
+    from main.api import app
+    c, df = TestClient(app), pd.read_csv(ROOT_DEMO_RUN)
+    two = pd.concat([df.assign(**{"Batch reference(Batch_ref:Batch ref)": 7}), df.drop(columns="pH").assign(**{"Batch reference(Batch_ref:Batch ref)": 8})])
+    two.loc[two["Batch reference(Batch_ref:Batch ref)"] == 8, "pH"] = np.nan
+    r = c.post("/runs/predict-batches", content=two.to_csv(index=False)).json()["runs"]
+    assert [x["batch"] for x in r] == ["7", "8"]
+    assert "result" in r[0] and "error" in r[1]
+    assert c.get("/runs/columns").json()[0]["name"] == "t"
+
+
+def test_uploaded_run_whatif_matches_dataset_batch():
+    """An uploaded copy of a held-out batch gets the same what-if / optimization as the batch itself (final model)."""
+    from fastapi.testclient import TestClient
+    from main.api import app
+    c = TestClient(app)
+    x = c.post("/runs/predict", content=pd.read_csv(ROOT_DEMO_RUN).to_csv(index=False)).json()["whatif_x"]  # batch 92
+    f1, f2 = [s["feature"] for s in c.post("/runs/sliders", json={"x": x}).json()[:2]]
+    assert c.post("/runs/curve", json={"x": x, "feature": f1}).json() == c.get(f"/batches/92/curve?feature={f1}").json()
+    w = c.post("/runs/whatif", json={"x": x, "changes": {f1: 0.05}}).json()
+    assert w["y_pred_after"] == pytest.approx(c.post("/simulate", json={"batch_id": 92, "changes": {f1: 0.05}}).json()["y_pred_after"])
+    assert len(c.post("/runs/grid", json={"x": x, "feature1": f1, "feature2": f2}).json()["y"]) == 10
+    assert c.post("/runs/optimize", json={"x": x}).json()["best"] == c.post("/batches/92/optimize").json()["best"]
+    assert c.post("/runs/whatif", json={"x": {"DO_mean": 1}, "changes": {}}).status_code == 422

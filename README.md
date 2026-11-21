@@ -6,7 +6,8 @@
 | (2) 품질예측 | 배치 진행 중 시점별(46~161 h) 요약 피처 → 범위를 자른 ridge(115 h 전) / XGBoost(115 h부터) → 최종 총수율(kg) |
 | (3) XAI | SHAP 원인 Top 3, 결정트리 규칙, 더미변수 검증 |
 | (4) What-if | 슬라이더 재예측, 안전 범위로 되돌렸을 때 CRITICAL 감소 건수 |
-| (5) API | `main/api.py` (HTTP) · `main/service.py` (화면은 구현하지 않음) |
+| (5) API | `main/api.py` (HTTP) · `main/service.py` |
+| (6) 웹 화면 | `web/` (React + Vite): 개요, 배치 선택, 모니터링, 이상 감지, 예측, 원인 분석, What-if, Replay, 최적화 |
 
 ## 폴더 구조
 
@@ -30,6 +31,7 @@ back/                           ← 저장소 폴더. 모든 명령은 여기서
 │  ├─ predict.py                새 운전 데이터 예측 (python -m main predict)
 │  ├─ service.py                (5) API가 쓰는 함수 (화면 데이터 가공)
 │  └─ api.py                    (5) HTTP API (python -m main serve)
+├─ web/                         (6) 웹 화면 (npm --prefix web run dev)
 ├─ tests/test_main.py
 ├─ results/                     예전 고정 분할 시험 결과 기록 (2026-11-02)
 └─ artifacts/                   자동 생성 (밴드, 경보 기준, 모델, 규칙, 반복 CV 결과)
@@ -153,6 +155,7 @@ alarm warning+  normal batches alarmed 10% (7%-13%), faults detected 78% (74%-80
 |---|---|
 | `GET /batches?t=` | 배치 100개 요약 |
 | `GET /batches/{id}?t=` | 요약 + 시점별 시계열(`series`), 수율 기여도 기준값(`shapBase`), 경보 설명 한 문장 |
+| `GET /batches/{id}/view?t=` | 한 배치의 전부(`service.batch_view`): 변수 21개와 정상 밴드·안전 범위, R(t)·등급, 시점별 수율 예측, 기여도 전체, 규칙, What-if 슬라이더 범위·반응 곡선 (약 1 MB) |
 | `GET /batches/{id}/shap?t=&k=` | 수율 기여도 상위 k개(기본 5, `k=0`이면 전부). 첫 예측 시점(46 h) 전에는 빈 목록 |
 | `GET /batches/{id}/contrib?t=` | 시각 t의 위험점수 R(t)를 변수별로 나눈 비율 (시점마다 바뀌는 원인) |
 | `GET /batches/{id}/events?all=&t=` | 1 h 이상 이어진 이탈 목록 (기본은 경보와 겹친 것만) |
@@ -161,6 +164,28 @@ alarm warning+  normal batches alarmed 10% (7%-13%), faults detected 78% (74%-80
 | `POST /simulate` | `{"batch_id": 6, "changes": {"Fpaa_tot": 0.05}}` → 슬라이더를 바꿨을 때 예상 수율 변화 |
 | `POST /batches/{id}/optimize` | `{"max_change": 0.2}`(생략 가능) → 슬라이더 추천값 (참고용) |
 | `GET /model` | 모델 제목, 시점별 모델(`cutoffs`), 반복 CV 성능(`cv`), 경보 기준, 시연 배치 |
+| `GET /batches/{id}/pca?t=` | PCA T²/SPE 시계열과 95 % 한계선 (참고용, 경보 판정에는 미반영). 먼저 `python -m main pca` 실행 |
+| `GET /batches/{id}/curve?feature=&t=` | 슬라이더 1개의 예측 수율 곡선. `t`가 115 h 전이면 422 |
+| `GET /batches/{id}/grid?feature1=&feature2=&t=` | 슬라이더 2개를 현재값 ±20 %로 바꾼 10×10 예측 수율. `t`가 115 h 전이면 422 |
+| `POST /runs/predict?control=&t=` | 새 배치 1개를 CSV 본문으로 받아 경보·수율·농도 예측·시계열·PCA·What-if 입력(`whatif_x`) 반환 |
+| `POST /runs/predict-batches` | 배치 여러 개가 든 CSV를 배치 구분 열(`Batch reference(...)` 또는 `batch`)로 나눠 각각 예측 |
+| `GET /runs/columns` | 새 배치에 필요한 열(t와 입력 변수) 목록. 직접 입력 화면용 |
+| `POST /runs/sliders`·`whatif`·`curve`·`grid`·`optimize` | `{x: whatif_x, ...}`: 업로드한 배치의 What-if·격자·최적화 (0 h부터 115 h 이상 기록 필요) |
+
+업로드 CSV는 `main.predict.normalize_run`이 맞춥니다: 짧은 이름(`Fg`)이나 원본 헤더(`Aeration rate(Fg:L/h)`) 모두 허용, 숫자가 아닌 칸은 결측, 시간은 0.2 h 격자로 맞추고 온라인 변수는 보간. 수율·What-if는 기록이 0 h부터 시작해야 나옵니다(첫 행 1 h 이내). 시험용 파일: `demo/run.csv`(1배치), `demo/test_multi_batches.csv`(고장 배치 4개, 원본 헤더). CORS는 Lovable 도메인과 localhost만 허용합니다.
+
+### 웹 화면
+
+API 서버를 켠 상태에서 실행합니다. Node.js 20 이상이 필요합니다.
+
+```powershell
+npm --prefix web install   # 처음 한 번
+npm --prefix web run dev   # http://localhost:5173, 같은 네트워크에서는 http://<이 PC IP>:5173
+```
+
+- 브라우저는 `/api/*`로 요청하고, Vite가 이를 `http://127.0.0.1:8000`으로 넘깁니다. 다른 주소의 API를 쓰려면 `CAVA_API` 환경변수로 지정합니다
+- 상단의 배치와 시점 t는 모든 화면에 공통입니다(t를 줄이면 진행 중 배치처럼 보임). Replay는 항상 배치 전체를 재생합니다
+- 화면 구성은 Lovable 목업(pixel-perfect-scene-473)을 따르되, 값과 단위는 이 백엔드 그대로입니다(수율 kg, 온도 K, R(t) 0~100, 80 % 범위)
 
 ### 값 읽는 법
 
