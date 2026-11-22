@@ -60,11 +60,15 @@ Early anomaly warning and final yield prediction for penicillin fermentation (In
 
     오류가 나지 않았다면 가상 환경 구축이 완료되었다.
 
-    원본 데이터는 저장소에 포함되어 있지 않다. IndPenSim 공개 데이터의 `100_Batches_IndPenSim_V3.csv`와 `100_Batches_IndPenSim_Statistics.csv` 두 파일을 `data/` 폴더에 넣는다. 위치를 바꾸려면 `config.yaml`의 `paths`를 고치면 된다.
+    원본 데이터는 저장소에 포함되어 있지 않고, IndPenSim 공개 데이터의 `100_Batches_IndPenSim_V3.csv`와 `100_Batches_IndPenSim_Statistics.csv` 두 파일을 `data/` 폴더에 넣는다.
+   
+    https://www.kaggle.com/datasets/stephengoldie/big-databiopharmaceutical-manufacturing/data
+   
+    위치를 바꾸려면 `config.yaml`의 `paths`를 고치면 된다.
 
     비주얼 스튜디오 코드에서 해당 폴더를 연 뒤, F1을 눌러 파이썬 인터프리터 설정에서 `.venv` 가상 환경을 선택한다.
 
-4. 실행
+5. 실행
 
     모든 명령은 저장소 폴더에서 실행한다.
 
